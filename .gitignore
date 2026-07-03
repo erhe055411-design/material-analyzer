@@ -22,6 +22,8 @@ wheels/
 
 # 数据库（敏感数据不上传）
 data/*.db
+data/*.db-shm
+data/*.db-wal
 !data/.gitkeep
 
 # 上传文件（临时文件）
