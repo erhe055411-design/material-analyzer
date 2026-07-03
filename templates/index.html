@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>素材经营分析系统</title>
+    <link rel="stylesheet" href="/static/css/app.css">
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+</head>
+<body>
+    <div id="app">
+        <nav class="sidebar">
+            <div class="sidebar-header">
+                <h1>素材经营分析</h1>
+                <p class="subtitle">Material Analyzer</p>
+            </div>
+            <ul class="nav-menu">
+                <li class="nav-item active" data-page="dashboard">
+                    <span class="nav-icon">📊</span> 项目看板
+                </li>
+                <li class="nav-item" data-page="analysis">
+                    <span class="nav-icon">📈</span> 素材分析
+                </li>
+                <li class="nav-item" data-page="recommend">
+                    <span class="nav-icon">🆕</span> 推荐上新
+                </li>
+                <li class="nav-item" data-page="import">
+                    <span class="nav-icon">📥</span> 数据导入
+                </li>
+                <li class="nav-item" data-page="tags">
+                    <span class="nav-icon">👥</span> 演员BD分析
+                </li>
+                <li class="nav-item" data-page="rules">
+                    <span class="nav-icon">⚙️</span> 分级规则
+                </li>
+            </ul>
+            <div class="sidebar-footer">
+                <p>本地运行 · 数据安全</p>
+            </div>
+        </nav>
+        <main class="main-content">
+            <header class="topbar">
+                <div class="topbar-left">
+                    <select id="projectSelector" class="project-select">
+                        <option value="">选择项目...</option>
+                    </select>
+                    <button class="btn btn-sm" onclick="showCreateProject()">+ 新建项目</button>
+                    <button class="btn btn-sm" id="btnRenameProject" onclick="showRenameProject()" style="display:none">✏️ 重命名</button>
+                    <button class="btn btn-sm btn-danger" id="btnDeleteProject" onclick="showDeleteProject()" style="display:none">🗑 删除</button>
+                    <button class="btn btn-sm btn-warn" id="btnClearProject" onclick="showClearProject()" style="display:none">🧹 清空数据</button>
+                </div>
+                <div class="topbar-right">
+                    <button class="btn btn-outline" onclick="exportData()">📤 导出</button>
+                </div>
+            </header>
+            <div id="pageContent" class="page-content"></div>
+        </main>
+    </div>
+
+    <div id="createProjectModal" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>新建项目</h3>
+                <span class="modal-close" onclick="closeModal('createProjectModal')">&times;</span>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>项目名称</label>
+                    <input type="text" id="newProjectName" placeholder="输入项目名称" class="form-input">
+                </div>
+                <div class="form-group">
+                    <label>项目描述（可选）</label>
+                    <textarea id="newProjectDesc" placeholder="输入项目描述" class="form-input" rows="3"></textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeModal('createProjectModal')">取消</button>
+                <button class="btn btn-primary" onclick="createProject()">创建</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="renameProjectModal" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>重命名项目</h3>
+                <span class="modal-close" onclick="closeModal('renameProjectModal')">&times;</span>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>项目名称</label>
+                    <input type="text" id="renameProjectName" placeholder="输入新名称" class="form-input">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeModal('renameProjectModal')">取消</button>
+                <button class="btn btn-primary" onclick="renameProject()">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="deleteProjectModal" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>删除项目</h3>
+                <span class="modal-close" onclick="closeModal('deleteProjectModal')">&times;</span>
+            </div>
+            <div class="modal-body">
+                <p id="deleteProjectMsg" style="color:#ff4d4f;font-size:14px;line-height:1.6;"></p>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeModal('deleteProjectModal')">取消</button>
+                <button class="btn btn-primary" style="background:#ff4d4f;border-color:#ff4d4f;" onclick="deleteProject()">确认删除</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="clearProjectModal" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>清空项目数据</h3>
+                <span class="modal-close" onclick="closeModal('clearProjectModal')">&times;</span>
+            </div>
+            <div class="modal-body">
+                <p style="color:#fa8c16;font-size:14px;line-height:1.6;">
+                    确定要清空该项目下的所有素材数据吗？<br><br>
+                    <strong>此操作将保留项目本身，但会删除：</strong><br>
+                    • 所有素材记录<br>
+                    • 所有账户记录<br>
+                    • 所有导入批次记录<br>
+                    • 所有素材标签数据<br><br>
+                    项目结构和名称将保留，您可以继续向该项目导入新数据。
+                </p>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeModal('clearProjectModal')">取消</button>
+                <button class="btn btn-primary" style="background:#fa8c16;border-color:#fa8c16;" onclick="clearProjectData()">确认清空</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
