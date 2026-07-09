@@ -56,3 +56,8 @@ Thumbs.db
 .pytest_cache/
 .coverage
 htmlcov/
+
+# 本地启动/配置脚本，不上传 GitHub
+修复AI配置并重启.command
+启动素材分析系统(DeepSeek).command
+重启服务.sh

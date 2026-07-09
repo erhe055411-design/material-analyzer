@@ -56,11 +56,13 @@ function goTo(page) {
     S.page = page;
     document.querySelectorAll('.nav-item').forEach(i => i.classList.toggle('active', i.dataset.page === page));
     render();
+    updateAIAssistantContext();
 }
 
 function render() {
     const fn = { dashboard: renderDashboard, analysis: renderAnalysis, recommend: renderRecommend, import: renderImport, tags: renderTags, rules: renderRules };
     (fn[S.page] || renderDashboard)();
+    updateAIAssistantContext();
 }
 
 // ========== 工具函数 ==========
@@ -525,6 +527,7 @@ async function loadMaterials(page) {
 
     try {
         const data = await api(`/api/projects/${S.pid}/materials?${params}`);
+        S.materials = data.items || [];
         const tbl = document.getElementById('materialsTable');
         if (!tbl) return;
 
@@ -534,7 +537,7 @@ async function loadMaterials(page) {
             return;
         }
 
-        // 添加AI操作栏
+        // 仅隐藏红框中的 AI 诊断入口；保留 AI 深度分析
         const hasItems = data.items && data.items.length > 0;
         const aiBarHtml = hasItems ? `
         <div class="ai-action-bar">
@@ -543,7 +546,6 @@ async function loadMaterials(page) {
                 <span id="selectedCount" style="margin-left:12px;color:#999;font-size:12px"></span>
             </div>
             <div class="ai-action-right">
-                <button class="btn btn-sm btn-ai" onclick="batchAIDiagnosis()">🤖 批量AI诊断</button>
                 <button class="btn btn-sm btn-deepseek" onclick="openAIChat()">✨ AI深度分析</button>
             </div>
         </div>` : '';
@@ -551,7 +553,7 @@ async function loadMaterials(page) {
         tbl.innerHTML = aiBarHtml + `<table><thead><tr>
             <th style="width:30px"><input type="checkbox" id="selectAllHeader" onclick="toggleSelectAll(this)"></th>
             <th>分级</th><th>素材名称</th><th>审核状态</th><th>消耗</th><th>展示</th><th>点击</th>
-            <th>点击率</th><th>转化数</th><th>转化成本</th><th>状态</th><th style="width:80px">AI诊断</th>
+            <th>点击率</th><th>转化数</th><th>转化成本</th><th>状态</th>
         </tr></thead><tbody>${data.items.map(m => `<tr>
             <td><input type="checkbox" class="ai-check" data-id="${m.id}" onchange="updateSelectCount()"></td>
             <td>${gradeBadge(m.grade || '-', m.is_potential, m.is_quality_grade, m.is_poor_grade)}</td>
@@ -572,7 +574,6 @@ async function loadMaterials(page) {
             <td>${fmt(m.conversion)}</td>
             <td>${fmt(m.conversion_cost)}</td>
             <td>${m.status || '-'}</td>
-            <td><button class="ai-diag-btn" onclick="singleAIDiagnosis(${m.id}, '${(m.material_name || '').replace(/'/g, "\\'")}')" title="AI智能诊断">🤖</button></td>
         </tr>`).join('')}</tbody></table>`;
 
         renderPagination(data.total, st.page);
@@ -1074,6 +1075,11 @@ function updateSelectCount() {
     if (el) {
         el.textContent = count > 0 ? `已选 ${count} 条` : '';
     }
+    // 如果AI助手弹窗已打开，实时更新上下文
+    const overlay = document.getElementById('aiAssistantOverlay');
+    if (overlay && !overlay.classList.contains('hidden')) {
+        updateAIAssistantContext();
+    }
 }
 
 async function singleAIDiagnosis(materialId, materialName) {
@@ -1176,6 +1182,8 @@ function showAIDiagnosisModal(data, mode) {
     `;
     
     document.body.insertAdjacentHTML('beforeend', modalHtml);
+    loadAIChatHistory(ids.length);
+    document.getElementById('aiChatInput')?.focus();
 }
 
 function closeAIDiagnosisModal() {
@@ -1185,38 +1193,57 @@ function closeAIDiagnosisModal() {
 
 // ========== DeepSeek AI 深度分析 ==========
 
-function openAIChat() {
+async function openAIChat(options = {}) {
     if (!S.pid) return alert('请先选择项目');
     const checked = document.querySelectorAll('.ai-check[data-id]:checked');
-    if (checked.length === 0) {
-        alert('请至少选择一条素材');
+    let ids = Array.from(checked).map(cb => parseInt(cb.dataset.id));
+    const isGlobal = !!options.global;
+
+    if (ids.length === 0 && isGlobal) {
+        if (!S.materials || S.materials.length === 0) {
+            try {
+                const data = await api(`/api/projects/${S.pid}/materials?limit=20`);
+                S.materials = data.items || [];
+            } catch (e) {
+                console.warn('加载素材上下文失败', e);
+            }
+        }
+        ids = (S.materials || []).slice(0, 20).map(m => m.id).filter(Boolean);
+    }
+    if (ids.length === 0) {
+        alert(isGlobal ? '当前项目还没有可分析的素材，请先导入素材数据' : '请至少选择一条素材');
         return;
     }
-    if (checked.length > 20) {
+    if (ids.length > 20) {
         alert('一次最多分析20条素材，请减少选择数量');
         return;
     }
 
     closeAIChatModal();
-    const ids = Array.from(checked).map(cb => parseInt(cb.dataset.id));
 
     const modalHtml = `
     <div class="ai-modal-overlay" id="aiChatOverlay">
         <div class="ai-modal ai-chat-modal">
             <div class="ai-modal-header">
-                <h3>✨ AI深度分析 (${ids.length}条素材)</h3>
-                <button class="close-btn" onclick="closeAIChatModal()">&times;</button>
+                <h3>✨ AI投放助手 (${ids.length}条素材)</h3>
+                <div class="ai-chat-header-actions">
+                    <button class="btn btn-sm" onclick="clearAIChatHistory()">清空记录</button>
+                    <button class="close-btn" onclick="closeAIChatModal()">&times;</button>
+                </div>
             </div>
             <div class="ai-modal-body">
+                <div class="ai-context-hint">${checked.length ? `正在分析你选中的 ${ids.length} 条素材` : `当前未勾选素材，默认分析当前项目最近 ${ids.length} 条素材`}</div>
                 <div class="ai-chat-suggestions">
                     <button class="suggestion-chip" onclick="document.getElementById('aiChatInput').value=this.textContent">分析这些素材的整体表现，哪些值得继续放量？</button>
                     <button class="suggestion-chip" onclick="document.getElementById('aiChatInput').value=this.textContent">哪些素材的转化成本偏高，可能的原因是什么？</button>
                     <button class="suggestion-chip" onclick="document.getElementById('aiChatInput').value=this.textContent">给我素材优化的具体建议</button>
                     <button class="suggestion-chip" onclick="document.getElementById('aiChatInput').value=this.textContent">分析点击率和转化率的关系，找出问题素材</button>
                 </div>
-                <div class="ai-chat-result" id="aiChatResult">
-                    <div class="ai-chat-placeholder">选择上方问题或在下方输入你的问题，AI将基于选中素材数据进行分析</div>
+                <div class="ai-chat-history-title">
+                    <span>历史聊天记录</span>
+                    <small id="aiChatHistoryStatus">加载中...</small>
                 </div>
+                <div class="ai-chat-result ai-chat-messages" id="aiChatResult"></div>
             </div>
             <div class="ai-modal-footer ai-chat-input-bar">
                 <input type="text" id="aiChatInput" class="ai-chat-input" placeholder="输入你的分析问题..." onkeydown="if(event.key==='Enter')sendAIChat()">
@@ -1226,6 +1253,8 @@ function openAIChat() {
     </div>
     `;
     document.body.insertAdjacentHTML('beforeend', modalHtml);
+    loadAIChatHistory(ids.length);
+    document.getElementById('aiChatInput')?.focus();
 }
 
 function closeAIChatModal() {
@@ -1248,8 +1277,11 @@ async function sendAIChat(materialIds) {
     const resultDiv = document.getElementById('aiChatResult');
     const sendBtn = document.getElementById('aiChatSendBtn');
 
-    resultDiv.innerHTML = '<div class="ai-chat-loading"><div class="spinner"></div>AI正在分析素材数据，请稍候...</div>';
-    if (sendBtn) { sendBtn.disabled = true; sendBtn.textContent = '分析中...'; }
+    appendAIChatMessage('user', question);
+    saveAIChatMessage('user', question);
+    input.value = '';
+    const loadingId = appendAIChatMessage('assistant', '<div class="spinner small"></div>正在分析，请稍候...', true);
+    if (sendBtn) { sendBtn.disabled = true; sendBtn.textContent = '发送中...'; }
 
     try {
         const data = await api(`/api/projects/${S.pid}/ai-chat`, {
@@ -1261,13 +1293,93 @@ async function sendAIChat(materialIds) {
             throw new Error(data.error);
         }
 
-        resultDiv.innerHTML = `<div class="ai-chat-reply">${formatAIReply(data.reply)}</div>`;
+        updateAIChatMessage(loadingId, formatAIReply(data.reply));
+        saveAIChatMessage('assistant', data.reply);
     } catch (e) {
-        resultDiv.innerHTML = `<div class="ai-chat-error">❌ ${e.message}</div>`;
+        const errText = `❌ ${e.message}`;
+        updateAIChatMessage(loadingId, `<div class="ai-chat-error">${escapeHtml(errText)}</div>`);
+        saveAIChatMessage('assistant', errText);
     } finally {
         if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = '发送'; }
-        input.value = '';
+        resultDiv.scrollTop = resultDiv.scrollHeight;
     }
+}
+
+function getAIChatHistoryKey() {
+    return `material_ai_chat_history_${S.pid || 'default'}`;
+}
+
+function getAIChatHistory() {
+    try {
+        return JSON.parse(localStorage.getItem(getAIChatHistoryKey()) || '[]');
+    } catch (e) {
+        return [];
+    }
+}
+
+function saveAIChatMessage(role, content) {
+    const history = getAIChatHistory();
+    history.push({ role, content, time: Date.now() });
+    const saved = history.slice(-60);
+    localStorage.setItem(getAIChatHistoryKey(), JSON.stringify(saved));
+    const status = document.getElementById('aiChatHistoryStatus');
+    if (status) status.textContent = `已保存 ${saved.length} 条`;
+}
+
+function loadAIChatHistory(materialCount) {
+    const history = getAIChatHistory();
+    const status = document.getElementById('aiChatHistoryStatus');
+    if (!history.length) {
+        if (status) status.textContent = '暂无历史记录';
+        appendAIChatMessage('assistant', `暂无历史记录。已读取你选中的 ${materialCount} 条素材，你可以像聊天一样问我：哪些素材值得放量、哪里成本偏高、下一步怎么优化。`);
+        return;
+    }
+    if (status) status.textContent = `已保存 ${history.length} 条`;
+    history.forEach(msg => {
+        if (msg.role === 'assistant' && !String(msg.content || '').startsWith('❌')) {
+            appendAIChatMessage(msg.role, formatAIReply(msg.content), true);
+        } else {
+            appendAIChatMessage(msg.role, msg.content);
+        }
+    });
+}
+
+function clearAIChatHistory() {
+    if (!confirm('确定清空当前项目的 AI 聊天记录吗？')) return;
+    localStorage.removeItem(getAIChatHistoryKey());
+    const resultDiv = document.getElementById('aiChatResult');
+    if (resultDiv) resultDiv.innerHTML = '';
+    const status = document.getElementById('aiChatHistoryStatus');
+    if (status) status.textContent = '暂无历史记录';
+    appendAIChatMessage('assistant', '聊天记录已清空。你可以重新提问，我会继续基于当前选中的素材进行分析。');
+}
+
+function appendAIChatMessage(role, content, isHtml = false) {
+    const resultDiv = document.getElementById('aiChatResult');
+    if (!resultDiv) return '';
+    const id = `msg_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    const avatar = role === 'user' ? '我' : 'AI';
+    const safeContent = isHtml ? content : escapeHtml(content).replace(/\n/g, '<br>');
+    resultDiv.insertAdjacentHTML('beforeend', `
+        <div class="ai-chat-message ${role}" id="${id}">
+            <div class="ai-chat-avatar">${avatar}</div>
+            <div class="ai-chat-bubble">${safeContent}</div>
+        </div>
+    `);
+    resultDiv.scrollTop = resultDiv.scrollHeight;
+    return id;
+}
+
+function updateAIChatMessage(id, html) {
+    const msg = document.getElementById(id);
+    const bubble = msg ? msg.querySelector('.ai-chat-bubble') : null;
+    if (bubble) bubble.innerHTML = html;
+}
+
+function escapeHtml(text) {
+    return String(text || '').replace(/[&<>"']/g, ch => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[ch]));
 }
 
 function formatAIReply(text) {
@@ -1284,4 +1396,388 @@ function formatAIReply(text) {
         .replace(/^\d+\.\s/gm, '<br>$&')
         .replace(/\n/g, '<br>');
     return html;
+}
+
+// ========== 全局AI助手 ==========
+
+const AI_PAGE_SUGGESTIONS = {
+    dashboard: {
+        label: '项目看板',
+        icon: '📊',
+        suggestions: [
+            '分析当前项目的整体投放表现',
+            '哪些账户或投放目的表现最好？',
+            'S级和A级素材有什么共同特点？',
+            '潜力素材值得放量测试吗？',
+            '给我优化建议'
+        ]
+    },
+    analysis: {
+        label: '素材分析',
+        icon: '📈',
+        suggestions: [
+            '分析当前筛选条件下的素材表现',
+            '哪些素材转化成本偏高，原因是什么？',
+            '这些素材中哪些值得继续放量？',
+            '给我素材优化的具体建议',
+            '分析点击率和转化率的关系'
+        ],
+        checked_suggestions: [
+            '分析这{n}条素材的共性特征',
+            '这些素材中哪些值得继续放量？',
+            '这{n}条素材的转化成本对比分析',
+            '给这{n}条素材优化建议',
+            '这{n}条素材中哪些应该停投？'
+        ]
+    },
+    recommend: {
+        label: '推荐上新',
+        icon: '🆕',
+        suggestions: [
+            '增量系列素材有哪些亮点？',
+            '稳量系列为什么适合持续投放？',
+            '潜力测试系列值得加大预算吗？',
+            '这三类素材的投放策略有什么区别？',
+            '给我推荐上新建议'
+        ]
+    },
+    import: {
+        label: '数据导入',
+        icon: '📥',
+        suggestions: [
+            '导入数据后如何快速分析？',
+            '字段映射有哪些注意事项？',
+            '数据格式有什么要求？',
+            '如何批量导入多个文件？',
+            '导入失败怎么排查？'
+        ]
+    },
+    tags: {
+        label: '演员BD分析',
+        icon: '👥',
+        suggestions: [
+            '哪个演员的素材表现最好？',
+            'BD维度有哪些投放规律？',
+            '演员和BD的组合效果分析',
+            '给我演员选角建议',
+            'BD团队绩效怎么看？'
+        ]
+    },
+    rules: {
+        label: '分级规则',
+        icon: '⚙️',
+        suggestions: [
+            '当前分级规则如何理解？',
+            'S/A/B/C的分级逻辑是什么？',
+            '如何自定义分级阈值？',
+            '潜力/优质/劣质的判定标准？',
+            '规则调整后如何重新分级？'
+        ]
+    }
+};
+
+function openGlobalAIAssistant() {
+    const overlay = document.getElementById('aiAssistantOverlay');
+    if (overlay) {
+        overlay.classList.remove('hidden');
+    }
+    updateAIAssistantContext();
+    // 加载历史聊天记录
+    renderAIChatHistory();
+}
+
+function closeGlobalAIAssistant() {
+    const overlay = document.getElementById('aiAssistantOverlay');
+    if (overlay) {
+        overlay.classList.add('hidden');
+    }
+}
+
+function updateAIAssistantContext() {
+    const pageConfig = AI_PAGE_SUGGESTIONS[S.page] || AI_PAGE_SUGGESTIONS.dashboard;
+    const pageTag = document.getElementById('aiContextPage');
+    const projectTag = document.getElementById('aiContextProject');
+    const selectedTag = document.getElementById('aiContextSelected');
+    const suggestionsEl = document.getElementById('aiAssistantSuggestions');
+    const statusEl = document.getElementById('aiAssistantStatus');
+
+    if (pageTag) {
+        pageTag.textContent = `${pageConfig.icon} ${pageConfig.label}`;
+    }
+
+    if (projectTag) {
+        const proj = S.projects.find(p => p.id === S.pid);
+        projectTag.textContent = proj ? `📁 ${proj.name}` : '未选项目';
+        projectTag.style.display = S.pid ? '' : 'none';
+    }
+
+    // 检测已选素材
+    let checkedCount = 0;
+    let activeSuggestions = pageConfig.suggestions;
+    if (S.page === 'analysis') {
+        const checked = document.querySelectorAll('.ai-check[data-id]:checked');
+        checkedCount = checked.length;
+        if (checkedCount > 0 && pageConfig.checked_suggestions) {
+            activeSuggestions = pageConfig.checked_suggestions.map(s => s.replace(/\{n\}/g, checkedCount));
+        }
+    }
+
+    // 显示/隐藏已选素材标签
+    if (selectedTag) {
+        if (checkedCount > 0) {
+            selectedTag.textContent = `✅ 已选 ${checkedCount} 条素材`;
+            selectedTag.style.display = '';
+        } else {
+            selectedTag.style.display = 'none';
+        }
+    }
+
+    // 渲染快捷建议
+    if (suggestionsEl) {
+        suggestionsEl.innerHTML = activeSuggestions.map(s =>
+            `<button class="ai-suggestion-chip" onclick="sendGlobalAIQuestion('${s.replace(/'/g, "\\'")}')">${s}</button>`
+        ).join('');
+    }
+
+    // 更新状态文案
+    if (statusEl) {
+        if (!S.pid) {
+            statusEl.textContent = '请先选择项目';
+        } else if (checkedCount > 0) {
+            statusEl.textContent = `基于${checkedCount}条已选素材分析`;
+        } else {
+            statusEl.textContent = `基于${pageConfig.label}分析`;
+        }
+    }
+}
+
+async function sendGlobalAIQuestion(question) {
+    const input = document.getElementById('aiAssistantInput');
+    const q = (question || (input?.value || '')).trim();
+    if (!q) return;
+
+    if (input) input.value = '';
+
+    // 获取选中的素材ID（仅在素材分析页）
+    let materialIds = [];
+    if (S.page === 'analysis') {
+        const checked = document.querySelectorAll('.ai-check[data-id]:checked');
+        materialIds = Array.from(checked).map(cb => parseInt(cb.dataset.id));
+    }
+
+    // 添加用户消息
+    appendGlobalAIMessage('user', q);
+
+    // 显示加载状态
+    const loadingId = appendGlobalAIMessage('assistant', '<div class="spinner small"></div>正在分析，请稍候...', true);
+    const sendBtn = document.getElementById('aiAssistantSendBtn');
+    if (sendBtn) { sendBtn.disabled = true; }
+
+    try {
+        const data = await api(`/api/projects/${S.pid || 0}/ai-chat-general`, {
+            method: 'POST',
+            body: JSON.stringify({
+                question: q,
+                page_context: S.page,
+                material_ids: materialIds
+            })
+        });
+
+        if (data.error) {
+            throw new Error(data.error);
+        }
+
+        updateGlobalAIMessage(loadingId, formatAIReply(data.reply));
+
+        // 保存到历史记录
+        const history = loadAIChatHistory();
+        history.push({ role: 'user', content: q, timestamp: Date.now() });
+        history.push({ role: 'assistant', content: data.reply, timestamp: Date.now(), model: data.model });
+        saveAIChatHistory(history);
+
+    } catch (e) {
+        const errText = `❌ ${e.message}`;
+        updateGlobalAIMessage(loadingId, `<div class="ai-chat-error">${escapeHtml(errText)}</div>`);
+
+        // 即使出错也保存用户的问题
+        const history = loadAIChatHistory();
+        history.push({ role: 'user', content: q, timestamp: Date.now() });
+        history.push({ role: 'assistant', content: `❌ ${e.message}`, timestamp: Date.now(), model: 'error' });
+        saveAIChatHistory(history);
+    } finally {
+        if (sendBtn) { sendBtn.disabled = false; }
+        const messagesEl = document.getElementById('aiAssistantMessages');
+        if (messagesEl) messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+}
+
+function appendGlobalAIMessage(role, content, isHtml = false) {
+    const messagesEl = document.getElementById('aiAssistantMessages');
+    if (!messagesEl) return '';
+
+    // 隐藏欢迎消息
+    const welcomeMsg = messagesEl.querySelector('.ai-welcome-message');
+    if (welcomeMsg) welcomeMsg.style.display = 'none';
+
+    const id = `msg_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    const avatar = role === 'user' ? '👤' : '🤖';
+    const safeContent = isHtml ? content : escapeHtml(content).replace(/\n/g, '<br>');
+
+    messagesEl.insertAdjacentHTML('beforeend', `
+        <div class="ai-chat-message ${role}" id="${id}">
+            <div class="ai-chat-avatar">${avatar}</div>
+            <div class="ai-chat-bubble">${safeContent}</div>
+        </div>
+    `);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+    return id;
+}
+
+function updateGlobalAIMessage(id, html) {
+    const msg = document.getElementById(id);
+    const bubble = msg ? msg.querySelector('.ai-chat-bubble') : null;
+    if (bubble) bubble.innerHTML = html;
+}
+
+// ========== 历史聊天记录 ==========
+const AI_HISTORY_MAX = 50;
+
+function getAIChatHistoryKey() {
+    const pid = S.pid || 'global';
+    return `ai_chat_history_${pid}`;
+}
+
+function loadAIChatHistory() {
+    try {
+        const key = getAIChatHistoryKey();
+        const data = localStorage.getItem(key);
+        return data ? JSON.parse(data) : [];
+    } catch (e) {
+        console.error('加载历史记录失败:', e);
+        return [];
+    }
+}
+
+function saveAIChatHistory(history) {
+    try {
+        const key = getAIChatHistoryKey();
+        // 限制最多保留50条
+        if (history.length > AI_HISTORY_MAX) {
+            history = history.slice(history.length - AI_HISTORY_MAX);
+        }
+        localStorage.setItem(key, JSON.stringify(history));
+    } catch (e) {
+        console.error('保存历史记录失败:', e);
+    }
+}
+
+function clearAIChatHistory() {
+    const key = getAIChatHistoryKey();
+    const count = loadAIChatHistory().length;
+    if (count === 0) {
+        alert('当前项目暂无聊天记录');
+        return;
+    }
+    if (!confirm(`确定要清空当前项目的 ${count} 条聊天记录吗？\n此操作不可恢复。`)) {
+        return;
+    }
+    localStorage.removeItem(key);
+    // 清空消息区域，重新显示欢迎语
+    const messagesEl = document.getElementById('aiAssistantMessages');
+    if (messagesEl) {
+        messagesEl.innerHTML = `
+            <div class="ai-welcome-message">
+                <div class="ai-welcome-avatar">🤖</div>
+                <div class="ai-welcome-text">
+                    <p>你好！我是AI素材助手。</p>
+                    <p>我可以根据你当前所在的页面，提供针对性的分析建议。</p>
+                    <p>试试上方的问题，或直接输入你想了解的内容。</p>
+                </div>
+            </div>
+        `;
+    }
+    // 显示提示
+    const hint = document.createElement('div');
+    hint.className = 'ai-assistant-message assistant';
+    hint.innerHTML = `
+        <div class="ai-chat-avatar">🤖</div>
+        <div class="ai-chat-bubble" style="background:#f6ffed;color:#52c41a;font-size:12px;">
+            ✅ 聊天记录已清空
+        </div>
+    `;
+    messagesEl?.appendChild(hint);
+    messagesEl && (messagesEl.scrollTop = messagesEl.scrollHeight);
+}
+
+function renderAIChatHistory() {
+    const history = loadAIChatHistory();
+    const messagesEl = document.getElementById('aiAssistantMessages');
+    if (!messagesEl) return;
+
+    // 清空并重新渲染
+    messagesEl.innerHTML = '';
+
+    if (history.length === 0) {
+        // 没有历史记录，显示欢迎语
+        messagesEl.innerHTML = `
+            <div class="ai-welcome-message">
+                <div class="ai-welcome-avatar">🤖</div>
+                <div class="ai-welcome-text">
+                    <p>你好！我是AI素材助手。</p>
+                    <p>我可以根据你当前所在的页面，提供针对性的分析建议。</p>
+                    <p>试试上方的问题，或直接输入你想了解的内容。</p>
+                </div>
+            </div>
+        `;
+        return;
+    }
+
+    // 渲染历史记录
+    history.forEach(record => {
+        const avatar = record.role === 'user' ? '👤' : '🤖';
+        const roleClass = record.role;
+        const content = record.role === 'assistant' 
+            ? formatAIReply(record.content)
+            : escapeHtml(record.content).replace(/\n/g, '<br>');
+        
+        messagesEl.insertAdjacentHTML('beforeend', `
+            <div class="ai-chat-message ${roleClass}">
+                <div class="ai-chat-avatar">${avatar}</div>
+                <div class="ai-chat-bubble">${content}</div>
+            </div>
+        `);
+    });
+
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+function appendGlobalAIMessage(role, content, isHtml = false) {
+    const messagesEl = document.getElementById('aiAssistantMessages');
+    if (!messagesEl) return '';
+
+    // 隐藏欢迎消息
+    const welcomeMsg = messagesEl.querySelector('.ai-welcome-message');
+    if (welcomeMsg) welcomeMsg.style.display = 'none';
+
+    const id = `msg_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    const avatar = role === 'user' ? '👤' : '🤖';
+    const safeContent = isHtml ? content : escapeHtml(content).replace(/\n/g, '<br>');
+
+    messagesEl.insertAdjacentHTML('beforeend', `
+        <div class="ai-chat-message ${role}" id="${id}">
+            <div class="ai-chat-avatar">${avatar}</div>
+            <div class="ai-chat-bubble">${safeContent}</div>
+        </div>
+    `);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+    return id;
+}
+
+function escapeHtml(text) {
+    if (!text) return '';
+    return text
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
 }

@@ -1489,7 +1489,7 @@ def _build_material_prompt(materials, user_question):
 
 @app.route('/api/projects/<int:pid>/ai-chat', methods=['POST'])
 def ai_chat(pid):
-    """AI大模型对话：基于素材数据回答用户问题。"""
+    """AI大模型对话：基于素材数据回答用户问题（原有AI深度分析接口）。"""
     if not is_ai_configured():
         return jsonify({
             'error': '未配置 AI_API_KEY 环境变量，请在本地 .env 或 Serverless 平台环境变量中配置。'
@@ -1543,6 +1543,170 @@ def ai_chat(pid):
         return jsonify({'error': str(e)}), 502
 
 
+# 通用AI对话：页面上下文prompt模板
+_PAGE_PROMPT_TEMPLATES = {
+    'dashboard': """你正在分析巨量引擎投放项目的整体看板数据。
+用户问题：{question}
+
+请基于项目整体表现给出专业分析，包括：
+1. 核心指标解读（消耗、转化、成本、素材数等）
+2. 分级分布分析（S/A/B/C各级素材的表现特点）
+3. 潜力/优质/劣质素材的策略建议
+4. 整体投放优化方向""",
+
+    'analysis': """你正在分析巨量引擎素材的详细数据。
+用户问题：{question}
+
+请基于素材明细数据给出分析，包括：
+1. 筛选条件下的素材表现总结
+2. 高价值素材的特征提取
+3. 问题素材的诊断和优化建议
+4. 账户/投放目的维度的对比分析""",
+
+    'recommend': """你正在分析巨量引擎的推荐上新素材。
+用户问题：{question}
+
+请基于推荐素材数据给出分析，包括：
+1. 增量系列（放量主力）的评估和建议
+2. 稳量系列（稳定产出）的评估和建议
+3. 潜力测试系列（值得测试）的评估和建议
+4. 上新策略和预算分配建议""",
+
+    'import': """你正在帮助用户导入巨量引擎素材数据。
+用户问题：{question}
+
+请基于数据导入场景给出指导，包括：
+1. CSV/Excel格式要求和字段说明
+2. 字段映射的最佳实践
+3. 常见导入问题排查
+4. 数据质量检查建议""",
+
+    'tags': """你正在分析巨量引擎素材的演员和BD维度数据。
+用户问题：{question}
+
+请基于演员/BD标签数据给出分析，包括：
+1. 演员维度的素材表现排名和特征
+2. BD维度的投放效果分析
+3. 演员和BD组合的效果洞察
+4. 选角和BD团队优化建议""",
+
+    'rules': """你正在解释巨量引擎素材的分级规则。
+用户问题：{question}
+
+请基于分级规则给出清晰说明，包括：
+1. S/A/B/C四级的判定逻辑和标准
+2. 潜力/优质/劣质标签的判定条件
+3. 规则参数的含义和调整建议
+4. 如何根据业务需求自定义规则"""
+}
+
+
+def _build_general_ai_prompt(page_context, question, project_data=None, material_data=None):
+    """根据页面上下文组装通用AI对话prompt。"""
+    template = _PAGE_PROMPT_TEMPLATES.get(page_context, _PAGE_PROMPT_TEMPLATES['dashboard'])
+    prompt = template.format(question=question)
+
+    # 如果有项目数据，追加到prompt
+    if project_data:
+        prompt += f"\n\n项目基本信息：\n{json.dumps(project_data, ensure_ascii=False, indent=2)}"
+
+    # 如果有素材数据，追加到prompt
+    if material_data:
+        prompt += f"\n\n相关素材数据（最多20条）：\n"
+        for i, m in enumerate(material_data[:20], 1):
+            prompt += f"\n--- 素材{i} ---\n"
+            prompt += f"名称: {m.get('material_name', '-')}\n"
+            prompt += f"分级: {m.get('grade', '-')}\n"
+            prompt += f"消耗: {m.get('cost', 0)}\n"
+            prompt += f"展示: {m.get('show', 0)}\n"
+            prompt += f"点击: {m.get('click', 0)}\n"
+            prompt += f"点击率: {m.get('ctr', 0)}%\n"
+            prompt += f"转化数: {m.get('conversion', 0)}\n"
+            prompt += f"转化成本: {m.get('conversion_cost', 0)}\n"
+            prompt += f"审核状态: {m.get('review_status', '-')}\n"
+
+    return prompt
+
+
+@app.route('/api/projects/<int:pid>/ai-chat-general', methods=['POST'])
+def ai_chat_general(pid):
+    """通用AI对话接口：根据页面上下文提供针对性分析。"""
+    if not is_ai_configured():
+        return jsonify({
+            'error': '未配置 AI_API_KEY 环境变量，请在本地 .env 或 Serverless 平台环境变量中配置。'
+        }), 500
+
+    data = request.get_json() or {}
+    question = data.get('question', '').strip()
+    page_context = data.get('page_context', 'dashboard')
+    material_ids = data.get('material_ids', [])
+
+    if not question:
+        return jsonify({'error': '请输入问题'}), 400
+
+    # 获取项目基本信息
+    project_data = None
+    material_data = None
+
+    if pid > 0:
+        conn = get_db()
+        try:
+            # 项目基础统计
+            cur = conn.execute("""
+                SELECT
+                    COUNT(DISTINCT a.id) as account_count,
+                    COUNT(m.id) as material_count,
+                    COALESCE(SUM(m.cost), 0) as total_cost,
+                    COALESCE(SUM(m.conversion), 0) as total_conversion,
+                    CASE WHEN SUM(m.click) > 0 THEN ROUND(SUM(m.click)*1.0/SUM(m.show)*100, 2) ELSE 0 END as avg_ctr,
+                    CASE WHEN SUM(m.conversion) > 0 THEN ROUND(SUM(m.cost)*1.0/SUM(m.conversion), 2) ELSE 0 END as avg_conv_cost
+                FROM accounts a
+                LEFT JOIN materials m ON m.account_id = a.id
+                WHERE a.project_id=?
+            """, (pid,))
+            project_data = dict(cur.fetchone())
+
+            # 分级分布
+            cur = conn.execute("""
+                SELECT m.grade, COUNT(*) as count, COALESCE(SUM(m.cost), 0) as cost
+                FROM materials m
+                JOIN accounts a ON m.account_id = a.id
+                WHERE a.project_id=? AND m.grade != ''
+                GROUP BY m.grade
+            """, (pid,))
+            project_data['grade_distribution'] = [dict(r) for r in cur.fetchall()]
+
+            # 如果有指定素材，获取素材详情
+            if material_ids:
+                placeholders = ','.join('?' * len(material_ids))
+                cur = conn.execute(f"""
+                    SELECT m.*, a.account_name, a.campaign_purpose, a.account_id as acc_id,
+                           t.video_code, t.price_point, t.product, t.actor, t.bd, t.copywriting
+                    FROM materials m
+                    JOIN accounts a ON m.account_id = a.id
+                    LEFT JOIN material_tags t ON t.material_id = m.id
+                    WHERE m.id IN ({placeholders}) AND a.project_id=?
+                """, material_ids + [pid])
+                material_data = [dict(r) for r in cur.fetchall()]
+        finally:
+            conn.close()
+
+    # 组装prompt并调用AI
+    prompt = _build_general_ai_prompt(page_context, question, project_data, material_data)
+
+    try:
+        reply = call_ai_chat([
+            {'role': 'system', 'content': '你是巨量引擎广告投放优化专家，精通素材分析、投放策略和转化优化。请给出专业、简洁、可执行的建议。'},
+            {'role': 'user', 'content': prompt}
+        ], temperature=0.6, max_tokens=2000)
+        return jsonify({
+            'reply': reply,
+            'model': AI_MODEL
+        })
+    except AIServiceError as e:
+        return jsonify({'error': str(e)}), 502
+
+
 if __name__ == '__main__':
     # 自动加载 .env 文件（不依赖 python-dotenv）
     env_path = os.path.join(os.path.dirname(__file__), '.env')
@@ -1568,4 +1732,5 @@ if __name__ == '__main__':
     else:
         print("  AI服务: ⚠️ 未配置（请设置 AI_API_KEY 环境变量；本地可写入 .env 文件）")
     print("=" * 50)
-    app.run(host='0.0.0.0', port=8080, debug=False)
+    port = int(os.environ.get('PORT', '8080'))
+    app.run(host='0.0.0.0', port=port, debug=False)
