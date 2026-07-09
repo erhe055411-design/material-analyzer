@@ -16,8 +16,23 @@ const S = {
 };
 
 // ========== API工具 ==========
+function getVisitorId() {
+    const key = 'material_analyzer_visitor_id';
+    let id = localStorage.getItem(key);
+    if (!id) {
+        const randomPart = (window.crypto && crypto.randomUUID)
+            ? crypto.randomUUID()
+            : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        id = `visitor-${randomPart}`;
+        localStorage.setItem(key, id);
+    }
+    return id;
+}
+
 async function api(url, opts = {}) {
-    opts.headers = { 'Content-Type': 'application/json', ...opts.headers };
+    const isFormData = opts.body instanceof FormData;
+    opts.headers = { 'X-Visitor-Id': getVisitorId(), ...opts.headers };
+    if (!isFormData) opts.headers = { 'Content-Type': 'application/json', ...opts.headers };
     const res = await fetch(url, opts);
     const contentType = res.headers.get('content-type') || '';
     const isJson = contentType.includes('application/json');

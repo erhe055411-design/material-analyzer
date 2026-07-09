@@ -30,6 +30,31 @@ os.makedirs(os.path.join(os.path.dirname(__file__), 'data'), exist_ok=True)
 init_db()
 
 
+def get_visitor_id():
+    """获取浏览器访客身份，用于免登录数据隔离。"""
+    vid = request.headers.get('X-Visitor-Id') or request.cookies.get('visitor_id') or 'legacy'
+    vid = ''.join(ch for ch in str(vid) if ch.isalnum() or ch in ('-', '_'))[:80]
+    return vid or 'legacy'
+
+
+def project_belongs_to_visitor(pid):
+    conn = get_db()
+    row = conn.execute("SELECT id FROM projects WHERE id=? AND visitor_id=?", (pid, get_visitor_id())).fetchone()
+    conn.close()
+    return bool(row)
+
+
+@app.before_request
+def enforce_project_visitor_scope():
+    if not request.path.startswith('/api/projects/'):
+        return None
+    parts = request.path.strip('/').split('/')
+    if len(parts) >= 3 and parts[0] == 'api' and parts[1] == 'projects' and parts[2].isdigit():
+        if not project_belongs_to_visitor(int(parts[2])):
+            return jsonify({'error': '项目不存在'}), 404
+    return None
+
+
 # ========== AI 服务配置 ==========
 
 AI_API_KEY = None
@@ -204,6 +229,7 @@ def index():
 
 @app.route('/api/projects', methods=['GET'])
 def list_projects():
+    visitor_id = get_visitor_id()
     conn = get_db()
     cur = conn.execute("""
         SELECT p.*, COUNT(DISTINCT a.id) as account_count,
@@ -213,9 +239,10 @@ def list_projects():
         FROM projects p
         LEFT JOIN accounts a ON a.project_id = p.id
         LEFT JOIN materials m ON m.account_id = a.id
+        WHERE p.visitor_id = ?
         GROUP BY p.id
         ORDER BY p.created_at DESC
-    """)
+    """, (visitor_id,))
     projects = [dict(r) for r in cur.fetchall()]
     conn.close()
     return jsonify(projects)
@@ -229,9 +256,10 @@ def create_project():
     if not name:
         return jsonify({'error': '项目名称不能为空'}), 400
 
+    visitor_id = get_visitor_id()
     conn = get_db()
     try:
-        cur = conn.execute("INSERT INTO projects (name, description) VALUES (?, ?)", (name, desc))
+        cur = conn.execute("INSERT INTO projects (visitor_id, name, description) VALUES (?, ?, ?)", (visitor_id, name, desc))
         conn.commit()
         pid = cur.lastrowid
         conn.close()
@@ -243,9 +271,10 @@ def create_project():
 
 @app.route('/api/projects/<int:pid>', methods=['DELETE'])
 def delete_project(pid):
+    visitor_id = get_visitor_id()
     conn = get_db()
     try:
-        conn.execute("DELETE FROM projects WHERE id=?", (pid,))
+        conn.execute("DELETE FROM projects WHERE id=? AND visitor_id=?", (pid, visitor_id))
         conn.commit()
     except Exception as e:
         conn.close()
@@ -301,12 +330,13 @@ def update_project(pid):
     if not name:
         return jsonify({'error': '项目名称不能为空'}), 400
 
+    visitor_id = get_visitor_id()
     conn = get_db()
     try:
         if desc is not None:
-            conn.execute("UPDATE projects SET name=?, description=? WHERE id=?", (name, desc, pid))
+            conn.execute("UPDATE projects SET name=?, description=? WHERE id=? AND visitor_id=?", (name, desc, pid, visitor_id))
         else:
-            conn.execute("UPDATE projects SET name=? WHERE id=?", (name, pid))
+            conn.execute("UPDATE projects SET name=? WHERE id=? AND visitor_id=?", (name, pid, visitor_id))
         conn.commit()
         conn.close()
         return jsonify({'ok': True})
@@ -343,31 +373,32 @@ def import_data():
     df = clean_dataframe(df, mapping, filename=file.filename)
 
     # 确定项目
+    visitor_id = get_visitor_id()
     conn = get_db()
     if project_id:
-        cur = conn.execute("SELECT id FROM projects WHERE id=?", (project_id,))
+        cur = conn.execute("SELECT id FROM projects WHERE id=? AND visitor_id=?", (project_id, visitor_id))
         proj = cur.fetchone()
         if not proj:
             conn.close()
             return jsonify({'error': '项目不存在'}), 400
         pid = proj['id']
     elif project_name:
-        cur = conn.execute("SELECT id FROM projects WHERE name=?", (project_name,))
+        cur = conn.execute("SELECT id FROM projects WHERE visitor_id=? AND name=?", (visitor_id, project_name))
         proj = cur.fetchone()
         if proj:
             pid = proj['id']
         else:
-            cur = conn.execute("INSERT INTO projects (name) VALUES (?)", (project_name,))
+            cur = conn.execute("INSERT INTO projects (visitor_id, name) VALUES (?, ?)", (visitor_id, project_name))
             pid = cur.lastrowid
     else:
         # 使用文件名作为项目名
         pname = os.path.splitext(file.filename)[0]
-        cur = conn.execute("SELECT id FROM projects WHERE name=?", (pname,))
+        cur = conn.execute("SELECT id FROM projects WHERE visitor_id=? AND name=?", (visitor_id, pname))
         proj = cur.fetchone()
         if proj:
             pid = proj['id']
         else:
-            cur = conn.execute("INSERT INTO projects (name) VALUES (?)", (pname,))
+            cur = conn.execute("INSERT INTO projects (visitor_id, name) VALUES (?, ?)", (visitor_id, pname))
             pid = cur.lastrowid
 
     # 记录导入日志

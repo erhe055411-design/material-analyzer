@@ -20,11 +20,13 @@ def init_db():
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS projects (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL UNIQUE,
+            visitor_id TEXT NOT NULL DEFAULT 'legacy',
+            name TEXT NOT NULL,
             description TEXT DEFAULT '',
             date_start TEXT DEFAULT '',
             date_end TEXT DEFAULT '',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(visitor_id, name)
         );
 
         CREATE TABLE IF NOT EXISTS accounts (
@@ -163,30 +165,71 @@ def init_db():
             VALUES ('默认规则', 10.0, 3, 30.0, 1, 1, 0, 50.0, 500.0, 1.5, 1000, 20, 1)
         """)
 
-    # 迁移：为已有表添加新列（忽略已存在的列）
+    # 迁移：为已有表添加新列（逐列执行，避免某一列已存在导致后续迁移被跳过）
+    migrations = [
+        "ALTER TABLE materials ADD COLUMN deep_conversion_rate REAL DEFAULT 0",
+        "ALTER TABLE materials ADD COLUMN avg_click_cost REAL DEFAULT 0",
+        "ALTER TABLE materials ADD COLUMN cpm REAL DEFAULT 0",
+        "ALTER TABLE materials ADD COLUMN status TEXT DEFAULT ''",
+        "ALTER TABLE materials ADD COLUMN review_status TEXT DEFAULT ''",
+        "ALTER TABLE materials ADD COLUMN material_evaluation TEXT DEFAULT ''",
+        "ALTER TABLE materials ADD COLUMN linked_adgroup_count INTEGER DEFAULT 0",
+        "ALTER TABLE materials ADD COLUMN tags TEXT DEFAULT ''",
+        "ALTER TABLE materials ADD COLUMN is_active INTEGER DEFAULT 0",
+        "ALTER TABLE materials ADD COLUMN is_quality INTEGER DEFAULT 0",
+        "ALTER TABLE materials ADD COLUMN is_potential INTEGER DEFAULT 0",
+        "ALTER TABLE materials ADD COLUMN is_quality_grade INTEGER DEFAULT 0",
+        "ALTER TABLE materials ADD COLUMN is_poor_grade INTEGER DEFAULT 0",
+        "ALTER TABLE projects ADD COLUMN date_start TEXT DEFAULT ''",
+        "ALTER TABLE projects ADD COLUMN date_end TEXT DEFAULT ''",
+        "ALTER TABLE projects ADD COLUMN visitor_id TEXT NOT NULL DEFAULT 'legacy'",
+        "ALTER TABLE import_logs ADD COLUMN account_id TEXT DEFAULT ''",
+        "ALTER TABLE import_logs ADD COLUMN date_start TEXT DEFAULT ''",
+        "ALTER TABLE import_logs ADD COLUMN date_end TEXT DEFAULT ''",
+    ]
+    for sql in migrations:
+        try:
+            conn.execute(sql)
+        except Exception:
+            pass  # 列已存在则忽略
+
+    # 兼容旧表结构：老版本 projects.name 是全局唯一，会导致不同访客不能创建同名项目。
+    # 检测到旧结构时重建 projects 表，改为 visitor_id + name 组合唯一。
     try:
-        conn.executescript("""
-            ALTER TABLE materials ADD COLUMN deep_conversion_rate REAL DEFAULT 0;
-            ALTER TABLE materials ADD COLUMN avg_click_cost REAL DEFAULT 0;
-            ALTER TABLE materials ADD COLUMN cpm REAL DEFAULT 0;
-            ALTER TABLE materials ADD COLUMN status TEXT DEFAULT '';
-            ALTER TABLE materials ADD COLUMN review_status TEXT DEFAULT '';
-            ALTER TABLE materials ADD COLUMN material_evaluation TEXT DEFAULT '';
-            ALTER TABLE materials ADD COLUMN linked_adgroup_count INTEGER DEFAULT 0;
-            ALTER TABLE materials ADD COLUMN tags TEXT DEFAULT '';
-            ALTER TABLE materials ADD COLUMN is_active INTEGER DEFAULT 0;
-            ALTER TABLE materials ADD COLUMN is_quality INTEGER DEFAULT 0;
-            ALTER TABLE materials ADD COLUMN is_potential INTEGER DEFAULT 0;
-            ALTER TABLE materials ADD COLUMN is_quality_grade INTEGER DEFAULT 0;
-            ALTER TABLE materials ADD COLUMN is_poor_grade INTEGER DEFAULT 0;
-            ALTER TABLE projects ADD COLUMN date_start TEXT DEFAULT '';
-            ALTER TABLE projects ADD COLUMN date_end TEXT DEFAULT '';
-            ALTER TABLE import_logs ADD COLUMN account_id TEXT DEFAULT '';
-            ALTER TABLE import_logs ADD COLUMN date_start TEXT DEFAULT '';
-            ALTER TABLE import_logs ADD COLUMN date_end TEXT DEFAULT '';
-        """)
+        row = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='projects'").fetchone()
+        create_sql = row[0] if row else ''
+        if 'name TEXT NOT NULL UNIQUE' in create_sql:
+            conn.execute("PRAGMA foreign_keys=OFF")
+            conn.execute("""
+                CREATE TABLE projects_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    visitor_id TEXT NOT NULL DEFAULT 'legacy',
+                    name TEXT NOT NULL,
+                    description TEXT DEFAULT '',
+                    date_start TEXT DEFAULT '',
+                    date_end TEXT DEFAULT '',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(visitor_id, name)
+                )
+            """)
+            conn.execute("""
+                INSERT OR IGNORE INTO projects_new
+                    (id, visitor_id, name, description, date_start, date_end, created_at)
+                SELECT id, COALESCE(visitor_id, 'legacy'), name,
+                       COALESCE(description, ''), COALESCE(date_start, ''), COALESCE(date_end, ''), created_at
+                FROM projects
+            """)
+            conn.execute("DROP TABLE projects")
+            conn.execute("ALTER TABLE projects_new RENAME TO projects")
+            conn.execute("PRAGMA foreign_keys=ON")
     except Exception:
-        pass  # 列已存在则忽略
+        pass
+
+    try:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_projects_visitor ON projects(visitor_id)")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_visitor_name ON projects(visitor_id, name)")
+    except Exception:
+        pass
 
     conn.commit()
     conn.close()
