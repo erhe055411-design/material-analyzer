@@ -218,34 +218,80 @@ function exportData() {
     window.open(`/api/projects/${S.pid}/export`);
 }
 
+function escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>"']/g, ch => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;'
+    }[ch]));
+}
+
+function copyButtonHtml(name) {
+    const safeArg = escapeHtml(JSON.stringify(String(name || '')));
+    return `<span class="copy-btn" onclick="copyMaterialName(event, ${safeArg})" title="复制素材名称">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+        </svg>
+    </span>`;
+}
+
+function fallbackCopyText(text) {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.setAttribute('readonly', '');
+    textarea.style.position = 'fixed';
+    textarea.style.top = '0';
+    textarea.style.left = '-9999px';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    textarea.setSelectionRange(0, textarea.value.length);
+    let ok = false;
+    try {
+        ok = document.execCommand('copy');
+    } finally {
+        document.body.removeChild(textarea);
+    }
+    return ok;
+}
+
 // 复制素材名称到剪贴板
-function copyMaterialName(event, name) {
-    event.stopPropagation();
+async function copyMaterialName(event, name) {
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
+    name = String(name || '').trim();
     if (!name || name === '-') {
         alert('没有可复制的素材名称');
         return;
     }
+
     // 恢复所有已隐藏的按钮，保证全局只有一个隐藏
     document.querySelectorAll('.copy-btn.hidden').forEach(el => el.classList.remove('hidden'));
-    const btn = event.currentTarget;
-    navigator.clipboard.writeText(name).then(() => {
-        btn.classList.add('hidden');
-    }).catch(err => {
-        console.error('复制失败:', err);
-        const textarea = document.createElement('textarea');
-        textarea.value = name;
-        textarea.style.position = 'fixed';
-        textarea.style.opacity = '0';
-        document.body.appendChild(textarea);
-        textarea.select();
-        try {
-            document.execCommand('copy');
-            btn.classList.add('hidden');
-        } catch (e) {
-            alert('复制失败，请手动复制');
+    const btn = event?.currentTarget;
+
+    let copied = false;
+    try {
+        if (navigator.clipboard && window.isSecureContext) {
+            await navigator.clipboard.writeText(name);
+            copied = true;
         }
-        document.body.removeChild(textarea);
-    });
+    } catch (err) {
+        console.warn('Clipboard API 复制失败，尝试兼容方案:', err);
+    }
+
+    if (!copied) {
+        copied = fallbackCopyText(name);
+    }
+
+    if (copied) {
+        btn?.classList.add('hidden');
+    } else {
+        alert('复制失败，请手动选中文案复制');
+    }
 }
 
 // ========== 项目看板 ==========
@@ -557,14 +603,9 @@ async function loadMaterials(page) {
         </tr></thead><tbody>${data.items.map(m => `<tr>
             <td><input type="checkbox" class="ai-check" data-id="${m.id}" onchange="updateSelectCount()"></td>
             <td>${gradeBadge(m.grade || '-', m.is_potential, m.is_quality_grade, m.is_poor_grade)}</td>
-            <td class="td-name" title="${m.material_name || ''}">
-                <span class="copy-btn" onclick="copyMaterialName(event, '${(m.material_name || '').replace(/'/g, "\\'")}')" title="复制素材名称">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-                    </svg>
-                </span>
-                ${m.material_name || '-'}
+            <td class="td-name" title="${escapeHtml(m.material_name || '')}">
+                ${copyButtonHtml(m.material_name || '')}
+                ${escapeHtml(m.material_name || '-')}
             </td>
             <td>${reviewStatusBadge(m.review_status)}</td>
             <td>${fmtCost(m.cost)}</td>
@@ -700,14 +741,9 @@ function renderRecommendTable(items, type) {
         <tbody>${items.map((m, idx) => `<tr>
             <td><span class="rank-badge rank-${idx < 3 ? idx + 1 : ''}">${idx + 1}</span></td>
             <td>${gradeBadge(m.grade || '-', m.is_potential, m.is_quality_grade, m.is_poor_grade)}</td>
-            <td class="td-name" title="${m.material_name || ''}">
-                <span class="copy-btn" onclick="copyMaterialName(event, '${(m.material_name || '').replace(/'/g, "\\'")}')" title="复制素材名称">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-                    </svg>
-                </span>
-                ${m.material_name || '-'}
+            <td class="td-name" title="${escapeHtml(m.material_name || '')}">
+                ${copyButtonHtml(m.material_name || '')}
+                ${escapeHtml(m.material_name || '-')}
             </td>
             <td>${reviewStatusBadge(m.review_status)}</td>
             <td>${fmtCost(m.cost)}</td>
@@ -1149,13 +1185,8 @@ function showAIDiagnosisModal(data, mode) {
             return `
             <div class="ai-diag-item">
                 <div class="ai-diag-title">
-                    <span class="copy-btn" onclick="copyMaterialName(event, '${(item.material_name || '').replace(/'/g, "\\'")}')" title="复制素材名称">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-                        </svg>
-                    </span>
-                    ${item.material_name || '未命名素材'}
+                    ${copyButtonHtml(item.material_name || '')}
+                    ${escapeHtml(item.material_name || '未命名素材')}
                 </div>
                 <div class="ai-diag-list">${diagPoints}</div>
             </div>`;
@@ -1374,12 +1405,6 @@ function updateAIChatMessage(id, html) {
     const msg = document.getElementById(id);
     const bubble = msg ? msg.querySelector('.ai-chat-bubble') : null;
     if (bubble) bubble.innerHTML = html;
-}
-
-function escapeHtml(text) {
-    return String(text || '').replace(/[&<>"']/g, ch => ({
-        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-    }[ch]));
 }
 
 function formatAIReply(text) {
@@ -1771,13 +1796,4 @@ function appendGlobalAIMessage(role, content, isHtml = false) {
     `);
     messagesEl.scrollTop = messagesEl.scrollHeight;
     return id;
-}
-
-function escapeHtml(text) {
-    if (!text) return '';
-    return text
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
 }
