@@ -923,7 +923,7 @@ def generate_ai_material_diagnosis(m):
 - 审核状态：{m.get('review_status', '-')}
 - 产品：{m.get('product', '-')}
 - 价格点：{m.get('price_point', '-')}
-- 演员：{m.get('actor', '-')}
+- 剪辑：{m.get('actor', '-')}
 - BD：{m.get('bd', '-')}
 - 文案：{m.get('copywriting', '-')}
 """.strip()
@@ -1327,7 +1327,7 @@ def potential_materials(pid):
 
 @app.route('/api/projects/<int:pid>/tag-analysis', methods=['GET'])
 def tag_analysis(pid):
-    """按视频名称解析标签分析（演员/BD/产品/价格点）"""
+    """按视频名称解析标签分析（剪辑/BD/产品/价格点）"""
     tag_type = request.args.get('tag_type', 'actor')  # actor/bd/product/price_point
     conn = get_db()
 
@@ -1472,7 +1472,7 @@ def _build_material_prompt(materials, user_question):
         lines.append(f"转化成本: {m.get('conversion_cost', 0)}")
         lines.append(f"审核状态: {m.get('review_status', '-')}")
         if m.get('actor'):
-            lines.append(f"演员: {m.get('actor')}")
+            lines.append(f"剪辑: {m.get('actor')}")
         if m.get('bd'):
             lines.append(f"BD: {m.get('bd')}")
         if m.get('product'):
@@ -1581,14 +1581,14 @@ _PAGE_PROMPT_TEMPLATES = {
 3. 常见导入问题排查
 4. 数据质量检查建议""",
 
-    'tags': """你正在分析巨量引擎素材的演员和BD维度数据。
+    'tags': """你正在分析巨量引擎素材的剪辑和BD维度数据。
 用户问题：{question}
 
-请基于演员/BD标签数据给出分析，包括：
-1. 演员维度的素材表现排名和特征
+请基于剪辑/BD标签数据给出分析，包括：
+1. 剪辑维度的素材表现排名和特征
 2. BD维度的投放效果分析
-3. 演员和BD组合的效果洞察
-4. 选角和BD团队优化建议""",
+3. 剪辑和BD组合的效果洞察
+4. 剪辑和BD团队优化建议""",
 
     'rules': """你正在解释巨量引擎素材的分级规则。
 用户问题：{question}

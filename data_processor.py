@@ -74,14 +74,15 @@ def parse_filename_info(filename: str) -> Dict[str, str]:
 def parse_video_name(name: str) -> Dict[str, str]:
     """
     解析视频名称中的结构化信息
-    格式: 编号+价格+产品+演员+BD+文案关键词.mp4
-    例: 1264+1.14+DK女40pro+马文锐+BD小星+三天两头.mp4
+    格式: 编号+价格+产品+剪辑+BD+文案关键词.mp4
+    例: 推送视频_1+4.13+钙尔奇1791+李传权+BDlsl+家里的（改1）.mp4
+    说明：历史字段名 actor 保持兼容，但业务含义展示为“剪辑”。
     """
     result = {
         'video_code': '',     # 编号
         'price_point': '',    # 价格点
         'product': '',        # 产品
-        'actor': '',          # 演员
+        'actor': '',          # 剪辑/负责人（历史字段名保持 actor 兼容）
         'bd': '',             # BD
         'copywriting': '',    # 文案关键词
         'version': '',        # 版本号(改1/改2)

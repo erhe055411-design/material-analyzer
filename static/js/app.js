@@ -1029,7 +1029,7 @@ function handleDrop(e) {
     if (file) handleFile(file);
 }
 
-// ========== 演员BD分析 ==========
+// ========== 剪辑BD分析 ==========
 async function renderTags() {
     const el = document.getElementById('pageContent');
     if (!S.pid) { el.innerHTML = '<div class="empty"><h3>请先选择项目</h3></div>'; return; }
@@ -1043,8 +1043,8 @@ async function renderTags() {
 
         el.innerHTML = `
         <div class="card-grid">
-            <div class="card"><div class="card-title">演员分析</div>
-            <div class="table-wrap"><table><thead><tr><th>演员</th><th>素材数</th><th>消耗</th><th>转化</th><th>转化成本</th><th>点击率</th></tr></thead>
+            <div class="card"><div class="card-title">剪辑分析</div>
+            <div class="table-wrap"><table><thead><tr><th>剪辑</th><th>素材数</th><th>消耗</th><th>转化</th><th>转化成本</th><th>点击率</th></tr></thead>
             <tbody>${actorData.map(d => `<tr><td>${d.tag_value || '未分类'}</td><td>${d.material_count}</td><td>${fmtCost(d.total_cost)}</td><td>${fmt(d.total_conversion)}</td><td>${fmt(d.avg_cost)}</td><td>${d.avg_ctr}%</td></tr>`).join('')}</tbody></table></div></div>
 
             <div class="card"><div class="card-title">BD分析</div>
@@ -1482,13 +1482,13 @@ const AI_PAGE_SUGGESTIONS = {
         ]
     },
     tags: {
-        label: '演员BD分析',
+        label: '剪辑BD分析',
         icon: '👥',
         suggestions: [
-            '哪个演员的素材表现最好？',
+            '哪个剪辑的素材表现最好？',
             'BD维度有哪些投放规律？',
-            '演员和BD的组合效果分析',
-            '给我演员选角建议',
+            '剪辑和BD的组合效果分析',
+            '给我剪辑优化建议',
             'BD团队绩效怎么看？'
         ]
     },
