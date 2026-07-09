@@ -604,16 +604,13 @@ async function loadMaterials(page) {
             return;
         }
 
-        // 仅隐藏红框中的 AI 诊断入口；保留 AI 深度分析
+        // AI 深度分析按钮暂时隐藏；保留全选和其他功能逻辑
         const hasItems = data.items && data.items.length > 0;
         const aiBarHtml = hasItems ? `
         <div class="ai-action-bar">
             <div class="ai-action-left">
                 <input type="checkbox" class="ai-check" id="selectAll" onclick="toggleSelectAll(this)"> <label for="selectAll">全选</label>
                 <span id="selectedCount" style="margin-left:12px;color:#999;font-size:12px"></span>
-            </div>
-            <div class="ai-action-right">
-                <button class="btn btn-sm btn-deepseek" onclick="openAIChat()">✨ AI深度分析</button>
             </div>
         </div>` : '';
 
