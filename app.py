@@ -335,7 +335,7 @@ def import_data():
 
     # 解析文件
     try:
-        df, mapping, warnings = parse_file(filepath)
+        df, mapping, details, warnings = parse_file(filepath)
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
 
@@ -606,7 +606,7 @@ def preview_file():
     file.save(filepath)
 
     try:
-        df, mapping, warnings = parse_file(filepath)
+        df, mapping, details, warnings = parse_file(filepath)
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
 
