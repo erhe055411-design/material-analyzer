@@ -5,7 +5,7 @@
 
 // ========== 全局状态 ==========
 const S = {
-    page: 'dashboard',
+    page: 'import',
     pid: null,
     projects: [],
     overview: null,
@@ -160,7 +160,7 @@ async function createProject() {
         S.pid = p.id;
         await loadProjects();
         closeModal('createProjectModal');
-        render();
+        goTo('import');
     } catch (e) { alert(e.message); }
 }
 
@@ -780,15 +780,30 @@ function renderRecommendTable(items, type) {
 async function renderImport() {
     const el = document.getElementById('pageContent');
     if (!S.pid) {
-        el.innerHTML = '<div class="empty"><h3>请先选择项目</h3><p>选择项目后再导入数据</p></div>';
+        el.innerHTML = `
+        <div class="import-hero">
+            <div class="import-hero-icon">📥</div>
+            <h2>开始你的第一次素材分析</h2>
+            <p>先创建一个项目，再上传巨量引擎导出的 Excel / CSV。系统会自动识别字段、生成素材诊断、剪辑BD分析和 AI 优化建议。</p>
+            <div class="import-steps">
+                <div><b>1</b><span>新建项目</span></div>
+                <div><b>2</b><span>上传数据</span></div>
+                <div><b>3</b><span>查看诊断</span></div>
+            </div>
+            <button class="btn btn-primary btn-hero" onclick="showCreateProject()">新建项目并导入数据</button>
+            <div class="import-hero-tip">支持 .xlsx / .xls / .csv，建议直接使用巨量引擎导出的原始报表。</div>
+        </div>`;
         return;
     }
 
     el.innerHTML = `
-    <div class="card">
-        <div class="card-title">导入素材数据</div>
-        <div class="upload-zone" id="uploadZone" ondragover="event.preventDefault()" ondrop="handleDrop(event)">
-            <p>📥 拖拽CSV/Excel文件到此处，或 <a href="javascript:void(0)" onclick="document.getElementById('fileInput').click()">点击上传</a></p>
+    <div class="card import-card">
+        <div class="card-title">第一步：导入素材数据</div>
+        <div class="import-subtitle">上传巨量引擎导出的 Excel / CSV，系统会自动识别字段并生成分析结果。</div>
+        <div class="upload-zone upload-zone-primary" id="uploadZone" ondragover="event.preventDefault()" ondrop="handleDrop(event)">
+            <div class="upload-icon">📥</div>
+            <p><b>拖拽文件到这里</b>，或 <a href="javascript:void(0)" onclick="document.getElementById('fileInput').click()">点击上传数据文件</a></p>
+            <small>支持 .xlsx / .xls / .csv</small>
             <input type="file" id="fileInput" accept=".csv,.xlsx,.xls" style="display:none" onchange="handleFile(this.files[0])">
         </div>
         <div id="importResult"></div>
