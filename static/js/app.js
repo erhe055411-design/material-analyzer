@@ -124,13 +124,15 @@ async function loadProjects() {
     S.projects.sort((a, b) => (b.material_count || 0) - (a.material_count || 0));
 
     const sel = document.getElementById('projectSelector');
-    sel.innerHTML = '<option value="">选择项目...</option>' +
-        S.projects.map(p => `<option value="${p.id}" ${S.pid === p.id ? 'selected' : ''}>${p.name} (${p.material_count || 0}条)</option>`).join('');
+    const currentExists = S.pid && S.projects.some(p => p.id === S.pid);
+    if (!currentExists) S.pid = null;
     if (!S.pid && S.projects.length > 0) {
         const withData = S.projects.filter(p => (p.material_count || 0) > 0);
         S.pid = withData.length > 0 ? withData[0].id : S.projects[0].id;
-        sel.value = S.pid;
     }
+    sel.innerHTML = '<option value="">选择项目...</option>' +
+        S.projects.map(p => `<option value="${p.id}" ${S.pid === p.id ? 'selected' : ''}>${p.name} (${p.material_count || 0}条)</option>`).join('');
+    sel.value = S.pid || '';
     updateProjectButtons();
 }
 
@@ -863,7 +865,7 @@ async function handleFile(file) {
     
     try {
         document.getElementById('importResult').innerHTML = `<div class="loading">正在解析文件字段映射...</div>`;
-        const preview = await fetch('/api/preview', { method: 'POST', body: previewForm }).then(r => r.json());
+        const preview = await api('/api/preview', { method: 'POST', body: previewForm });
         
         if (preview.error) {
             document.getElementById('importResult').innerHTML = `<div class="error-box">${preview.error}</div>`;
@@ -1037,7 +1039,7 @@ async function confirmMappingAndImport() {
     closeMappingModal();
     
     try {
-        const data = await fetch('/api/import', { method: 'POST', body: form }).then(r => r.json());
+        const data = await api('/api/import', { method: 'POST', body: form });
         if (data.error) {
             document.getElementById('importResult').innerHTML = `<div class="error-box">导入失败: ${data.error}</div>`;
             return;
