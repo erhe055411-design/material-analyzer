@@ -893,3 +893,28 @@ td:nth-child(n+3) { white-space: nowrap; }
 .page-content {
     padding-bottom: 80px;
 }
+
+/* 复制按钮交互：复制成功后当前按钮消失，切换复制时上一个按钮恢复 */
+.copy-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    margin-right: 6px;
+    border-radius: 6px;
+    color: #8c8c8c;
+    cursor: pointer;
+    vertical-align: middle;
+    transition: opacity 0.16s ease, transform 0.16s ease, visibility 0.16s ease, background 0.16s ease;
+}
+.copy-btn:hover {
+    color: #1677ff;
+    background: #e6f4ff;
+}
+.copy-btn.hidden {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transform: scale(0.72);
+}

@@ -259,6 +259,8 @@ function fallbackCopyText(text) {
     return ok;
 }
 
+let lastHiddenCopyButton = null;
+
 // 复制素材名称到剪贴板
 async function copyMaterialName(event, name) {
     event?.preventDefault?.();
@@ -269,8 +271,6 @@ async function copyMaterialName(event, name) {
         return;
     }
 
-    // 恢复所有已隐藏的按钮，保证全局只有一个隐藏
-    document.querySelectorAll('.copy-btn.hidden').forEach(el => el.classList.remove('hidden'));
     const btn = event?.currentTarget;
 
     let copied = false;
@@ -288,7 +288,11 @@ async function copyMaterialName(event, name) {
     }
 
     if (copied) {
+        if (lastHiddenCopyButton && lastHiddenCopyButton !== btn && document.body.contains(lastHiddenCopyButton)) {
+            lastHiddenCopyButton.classList.remove('hidden');
+        }
         btn?.classList.add('hidden');
+        lastHiddenCopyButton = btn || null;
     } else {
         alert('复制失败，请手动选中文案复制');
     }
