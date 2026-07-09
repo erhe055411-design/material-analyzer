@@ -28,6 +28,16 @@ fi
 echo "✅ 依赖检查完成"
 echo ""
 
+# 加载 .env 环境变量（AI API Key 等）
+if [ -f "$SCRIPT_DIR/.env" ]; then
+    export $(grep -v '^#' "$SCRIPT_DIR/.env" | xargs)
+    echo "✅ 已加载 .env 配置"
+else
+    echo "⚠️  未找到 .env 文件，AI深度分析功能将不可用"
+    echo "   请复制 .env.example 为 .env 并填入百度千帆 API Key"
+fi
+echo ""
+
 # 初始化数据库
 python3 -c "from models import init_db; init_db()"
 echo "✅ 数据库就绪"

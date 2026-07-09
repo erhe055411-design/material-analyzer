@@ -126,36 +126,46 @@ def parse_video_name(name: str) -> Dict[str, str]:
     return result
 
 
-def identify_columns(columns: List[str]) -> Dict[str, str]:
+def identify_columns(columns: List[str]) -> Tuple[Dict[str, str], Dict[str, Dict]]:
     """
     自动识别Excel/CSV列名到标准字段的映射
-    返回: {标准字段名: 原始列名}
+    返回: (mapping, details)
+    mapping: {标准字段名: 原始列名}
+    details: {标准字段名: {column, score, candidates: [{column, score}]}}
     """
     mapping = {}
     used_columns = set()
+    details = {}
 
     for std_field, patterns in FIELD_PATTERNS.items():
         best_match = None
         best_score = 0
+        candidates = []
 
         for col in columns:
             if col in used_columns:
                 continue
 
             col_clean = str(col).strip()
+            col_score = 0
             for pattern in patterns:
                 # 精确匹配
                 if col_clean.lower() == pattern.lower():
-                    best_match = col
-                    best_score = 100
+                    col_score = 100
                     break
 
                 # 包含匹配
                 if pattern.lower() in col_clean.lower():
                     score = len(pattern) / len(col_clean) * 80
-                    if score > best_score:
-                        best_match = col
-                        best_score = score
+                    if score > col_score:
+                        col_score = score
+
+            if col_score > 0:
+                candidates.append({'column': col, 'score': round(col_score, 1)})
+
+            if col_score > best_score:
+                best_match = col
+                best_score = col_score
 
             if best_score == 100:
                 break
@@ -164,7 +174,13 @@ def identify_columns(columns: List[str]) -> Dict[str, str]:
             mapping[std_field] = best_match
             used_columns.add(best_match)
 
-    return mapping
+        details[std_field] = {
+            'column': best_match,
+            'score': round(best_score, 1),
+            'candidates': sorted(candidates, key=lambda x: x['score'], reverse=True)[:5]
+        }
+
+    return mapping, details
 
 
 def clean_numeric(value) -> Optional[float]:
@@ -331,10 +347,10 @@ def clean_dataframe(df: pd.DataFrame, mapping: Dict[str, str], filename: str = '
     return df
 
 
-def parse_file(filepath: str) -> Tuple[pd.DataFrame, Dict[str, str], List[str]]:
+def parse_file(filepath: str) -> Tuple[pd.DataFrame, Dict[str, str], Dict[str, Dict], List[str]]:
     """
     解析Excel或CSV文件
-    返回: (DataFrame, 字段映射, 警告列表)
+    返回: (DataFrame, 字段映射, 映射详情, 警告列表)
     """
     warnings = []
     filename = os.path.basename(filepath)
@@ -365,7 +381,7 @@ def parse_file(filepath: str) -> Tuple[pd.DataFrame, Dict[str, str], List[str]]:
         raise ValueError("文件中没有有效数据行")
 
     # 自动识别字段
-    mapping = identify_columns(df.columns.tolist())
+    mapping, details = identify_columns(df.columns.tolist())
 
     # 检查核心字段
     for core in CORE_FIELDS:
@@ -383,4 +399,4 @@ def parse_file(filepath: str) -> Tuple[pd.DataFrame, Dict[str, str], List[str]]:
     if file_info.get('account_id'):
         warnings.append(f"从文件名识别到账户ID: {file_info['account_id']}, 导出时间: {file_info.get('export_time', '未知')}")
 
-    return df, mapping, warnings
+    return df, mapping, details, warnings

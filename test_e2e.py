@@ -130,7 +130,7 @@ def test_file_parsing():
     print("\n--- 测试文件解析 ---")
     filepath = generate_test_data()
 
-    df, mapping, warnings = parse_file(filepath)
+    df, mapping, details, warnings = parse_file(filepath)
     print(f"  解析行数: {len(df)}")
     print(f"  识别字段: {list(mapping.keys())}")
 
@@ -162,7 +162,7 @@ def test_database():
 
     # 测试完整导入流程
     filepath = os.path.join(os.path.dirname(__file__), 'uploads', 'test_data.xlsx')
-    df, mapping, warnings = parse_file(filepath)
+    df, mapping, details, warnings = parse_file(filepath)
     df = clean_dataframe(df, mapping)
 
     cur = conn.execute("SELECT id FROM projects WHERE name='测试项目'")

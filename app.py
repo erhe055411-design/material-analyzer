@@ -1,6 +1,9 @@
 """素材经营分析系统 - Flask应用主入口"""
 import os
 import json
+import urllib.request
+import urllib.error
+from pathlib import Path
 from flask import Flask, request, jsonify, send_from_directory, render_template
 from models import init_db, get_db
 from data_processor import parse_file, clean_dataframe, identify_columns
@@ -25,6 +28,169 @@ os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 os.makedirs(os.path.join(os.path.dirname(__file__), 'data'), exist_ok=True)
 
 init_db()
+
+
+# ========== AI 服务配置 ==========
+
+AI_API_KEY = None
+AI_BASE_URL = None
+AI_MODEL = None
+AI_TIMEOUT = None
+
+
+def load_project_env():
+    """加载项目根目录 .env，并覆盖终端里残留的旧 AI_* 环境变量。"""
+    env_path = Path(__file__).resolve().parent / '.env'
+    if not env_path.exists():
+        return
+    for line in env_path.read_text(encoding='utf-8').splitlines():
+        line = line.strip()
+        if not line or line.startswith('#') or '=' not in line:
+            continue
+        key, value = line.split('=', 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key:
+            os.environ[key] = value
+
+
+def load_ai_config():
+    """从项目 .env / 环境变量刷新 AI 配置；本地 .env 优先，Serverless 直接用平台环境变量。"""
+    load_project_env()
+    global AI_API_KEY, AI_BASE_URL, AI_MODEL, AI_TIMEOUT
+    AI_API_KEY = os.environ.get('AI_API_KEY') or os.environ.get('OPENAI_API_KEY') or os.environ.get('DEEPSEEK_API_KEY')
+    AI_BASE_URL = os.environ.get('AI_BASE_URL', 'https://api.deepseek.com/v1').rstrip('/')
+    AI_MODEL = os.environ.get('AI_MODEL', 'deepseek-chat')
+    AI_TIMEOUT = int(os.environ.get('AI_TIMEOUT', '30'))
+
+
+load_ai_config()
+
+
+class AIServiceError(Exception):
+    """AI 服务调用异常。"""
+
+
+def is_ai_configured():
+    return bool(AI_API_KEY)
+
+
+def call_ai_chat(messages, temperature=0.3, max_tokens=1200):
+    """调用 OpenAI-compatible Chat Completions API。
+
+    兼容 DeepSeek(Bearer Token) 和 百度千帆(v3 AK/SK → access_token)。
+    前端只请求本服务端接口，API Key 始终从环境变量读取，不进入前端代码。
+    """
+    if not AI_API_KEY:
+        raise AIServiceError('未配置 AI_API_KEY 环境变量')
+
+    # 千帆 v3 AK/SK 认证：走 access_token 方式
+    if AI_API_KEY.startswith('bce-v3'):
+        return _call_qianfan_v3(messages, temperature, max_tokens)
+
+    # 标准 OpenAI-compatible (DeepSeek / 千帆 v2)
+    url = f'{AI_BASE_URL}/chat/completions'
+    payload = json.dumps({
+        'model': AI_MODEL,
+        'messages': messages,
+        'temperature': temperature,
+        'max_tokens': max_tokens,
+    }).encode('utf-8')
+
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        headers={
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {AI_API_KEY}',
+        },
+        method='POST'
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=AI_TIMEOUT) as resp:
+            result = json.loads(resp.read().decode('utf-8'))
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode('utf-8', errors='ignore')[:500]
+        raise AIServiceError(f'AI 服务返回错误：HTTP {e.code} {detail}')
+    except urllib.error.URLError as e:
+        raise AIServiceError(f'AI 服务网络异常：{e.reason}')
+    except Exception as e:
+        raise AIServiceError(f'AI 服务调用失败：{e}')
+
+    try:
+        return result['choices'][0]['message']['content']
+    except (KeyError, IndexError, TypeError):
+        raise AIServiceError('AI 服务返回格式异常')
+
+
+_QIANFAN_ACCESS_TOKEN = None
+_QIANFAN_TOKEN_EXPIRY = 0
+
+
+def _get_qianfan_access_token(ak, sk):
+    """获取千帆 access_token，带 20 分钟缓存"""
+    global _QIANFAN_ACCESS_TOKEN, _QIANFAN_TOKEN_EXPIRY
+    import time
+    if _QIANFAN_ACCESS_TOKEN and time.time() < _QIANFAN_TOKEN_EXPIRY:
+        return _QIANFAN_ACCESS_TOKEN
+    url = f'https://aip.baidubce.com/oauth/2.0/token?grant_type=client_credentials&client_id={ak}&client_secret={sk}'
+    try:
+        with urllib.request.urlopen(url, timeout=15) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+            token = data.get('access_token')
+            expires_in = data.get('expires_in', 3600)
+            if not token:
+                raise AIServiceError(f"千帆获取 token 失败：{data.get('error_description', '未知错误')}")
+            _QIANFAN_ACCESS_TOKEN = token
+            _QIANFAN_TOKEN_EXPIRY = time.time() + expires_in - 300  # 提前5分钟过期
+            return token
+    except urllib.error.HTTPError as e:
+        raise AIServiceError(f"千帆 token 获取失败 HTTP {e.code}")
+    except urllib.error.URLError as e:
+        raise AIServiceError(f"千帆 token 网络异常：{e.reason}")
+
+
+def _call_qianfan_v3(messages, temperature, max_tokens):
+    """千帆 v3 AK/SK 认证：先获取 access_token，再调用推理接口"""
+    # 解析 AK/SK
+    key = AI_API_KEY
+    if key.startswith('bce-v3/ALTAK-') and '/' in key[len('bce-v3/'):]:
+        ak = key[len('bce-v3/'):].split('/')[0]
+        sk = key[len('bce-v3/'):].split('/')[1]
+    else:
+        raise AIServiceError('千帆 AK/SK 格式异常，应为 bce-v3/ALTAK-xxx/yyy')
+
+    token = _get_qianfan_access_token(ak, sk)
+    url = f'https://aip.baidubce.com/rpc/2.0/ai_custom/v1/wenxinworkshop/chat/{AI_MODEL}?access_token={token}'
+
+    # 千帆 v3 接口参数
+    payload = json.dumps({
+        'messages': messages,
+        'temperature': temperature,
+        'max_output_tokens': max_tokens,
+    }).encode('utf-8')
+
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        headers={'Content-Type': 'application/json'},
+        method='POST'
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=AI_TIMEOUT) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode('utf-8', errors='ignore')[:500]
+        raise AIServiceError(f'千帆服务返回错误：HTTP {e.code} {detail}')
+    except urllib.error.URLError as e:
+        raise AIServiceError(f'千帆服务网络异常：{e.reason}')
+
+    if 'error' in data:
+        raise AIServiceError(f"千帆服务错误：{data['error'].get('message', data['error'])}")
+
+    return data.get('result', '')
 
 
 # ========== 页面路由 ==========
@@ -681,6 +847,213 @@ def list_materials(pid):
     })
 
 
+@app.route('/api/projects/<int:pid>/ai-diagnosis', methods=['POST'])
+def ai_diagnosis(pid):
+    """AI智能评语：单条/批量素材诊断"""
+    data = request.get_json() or {}
+    material_ids = data.get('material_ids', [])
+    
+    if not material_ids:
+        return jsonify({'error': '未指定素材ID'}), 400
+    
+    conn = get_db()
+    # 获取素材数据
+    placeholders = ','.join('?' * len(material_ids))
+    cur = conn.execute(f"""
+        SELECT m.*, a.account_name, a.campaign_purpose, a.account_id as acc_id,
+               t.video_code, t.price_point, t.product, t.actor, t.bd, t.copywriting
+        FROM materials m
+        JOIN accounts a ON m.account_id = a.id
+        LEFT JOIN material_tags t ON t.material_id = m.id
+        WHERE m.id IN ({placeholders}) AND a.project_id=?
+    """, material_ids + [pid])
+    
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    
+    if not rows:
+        return jsonify({'error': '未找到指定素材'}), 404
+    
+    # 生成AI评语：优先调用服务端 AI 代理；未配置或失败时使用本地规则兜底
+    results = []
+    source = 'ai' if is_ai_configured() else 'local_rules'
+    errors = []
+    for m in rows:
+        try:
+            diagnosis = generate_ai_material_diagnosis(m) if is_ai_configured() else generate_material_diagnosis(m)
+        except Exception as e:
+            source = 'local_rules'
+            errors.append(str(e))
+            diagnosis = generate_material_diagnosis(m)
+        results.append({
+            'material_id': m['id'],
+            'material_name': m['material_name'],
+            'diagnosis': diagnosis
+        })
+    
+    response = {
+        'total': len(results),
+        'items': results,
+        'source': source
+    }
+    if errors:
+        response['warning'] = 'AI调用失败，已自动使用本地规则诊断'
+    return jsonify(response)
+
+
+def generate_ai_material_diagnosis(m):
+    """调用大模型生成单条素材诊断，返回与前端兼容的结构。"""
+    prompt = f"""
+请作为巨量引擎广告投放优化专家，分析下面这条素材数据，输出严格 JSON 数组，不要 Markdown，不要额外解释。
+数组元素格式：{{"type":"success|warning|info|error","tag":"不超过6个字","text":"一句可执行诊断建议"}}
+最多输出 4 条，优先指出影响投放结果的核心问题或亮点。
+
+素材数据：
+- 名称：{m.get('material_name', '-')}
+- 账户：{m.get('account_name', '-')}
+- 投放目的：{m.get('campaign_purpose', '-')}
+- 分级：{m.get('grade', '-')}
+- 消耗：{m.get('cost', 0)}
+- 展示：{m.get('show', 0)}
+- 点击：{m.get('click', 0)}
+- CTR：{m.get('ctr', 0)}%
+- 转化数：{m.get('conversion', 0)}
+- 转化成本：{m.get('conversion_cost', 0)}
+- ROI：{m.get('roi', 0)}
+- 审核状态：{m.get('review_status', '-')}
+- 产品：{m.get('product', '-')}
+- 价格点：{m.get('price_point', '-')}
+- 演员：{m.get('actor', '-')}
+- BD：{m.get('bd', '-')}
+- 文案：{m.get('copywriting', '-')}
+""".strip()
+
+    content = call_ai_chat([
+        {'role': 'system', 'content': '你是巨量引擎广告投放优化专家，擅长素材诊断、成本优化和创意复盘。只输出合法 JSON。'},
+        {'role': 'user', 'content': prompt}
+    ], temperature=0.2, max_tokens=900)
+
+    raw = content.strip()
+    if raw.startswith('```'):
+        raw = raw.strip('`')
+        if raw.lower().startswith('json'):
+            raw = raw[4:].strip()
+    start = raw.find('[')
+    end = raw.rfind(']')
+    if start == -1 or end == -1 or end <= start:
+        raise AIServiceError('AI 诊断未返回 JSON 数组')
+
+    items = json.loads(raw[start:end + 1])
+    normalized = []
+    for item in items[:4]:
+        if not isinstance(item, dict):
+            continue
+        point_type = item.get('type') if item.get('type') in ('success', 'warning', 'info', 'error') else 'info'
+        tag = str(item.get('tag') or 'AI建议')[:12]
+        text = str(item.get('text') or '').strip()
+        if text:
+            normalized.append({'type': point_type, 'tag': tag, 'text': text})
+    if not normalized:
+        raise AIServiceError('AI 诊断结果为空')
+    return normalized
+
+
+def generate_material_diagnosis(m):
+    """基于素材数据生成智能评语（本地规则引擎）"""
+    diagnosis = []
+    
+    cost = float(m.get('cost', 0) or 0)
+    show = float(m.get('show', 0) or 0)
+    click = float(m.get('click', 0) or 0)
+    ctr = float(m.get('ctr', 0) or 0)
+    conversion = float(m.get('conversion', 0) or 0)
+    conversion_cost = float(m.get('conversion_cost', 0) or 0)
+    grade = m.get('grade', '')
+    review_status = m.get('review_status', '')
+    
+    # 1. 消耗与转化分析
+    if cost > 10000 and conversion < 5:
+        diagnosis.append({
+            'type': 'warning',
+            'tag': '高耗低效',
+            'text': '消耗超过1万但转化极少，素材吸引力或落地页承接有问题，建议暂停并分析3秒完播率和首帧卖点。'
+        })
+    elif cost > 5000 and conversion_cost > 500:
+        diagnosis.append({
+            'type': 'warning',
+            'tag': '成本过高',
+            'text': '转化成本偏高，建议对比同账户其他素材的成本结构，检查是否定向过窄或出价不合理。'
+        })
+    elif cost > 0 and conversion_cost < 100 and conversion >= 10:
+        diagnosis.append({
+            'type': 'success',
+            'tag': '优质素材',
+            'text': f'转化成本仅{conversion_cost:.0f}元且转化稳定，属于高效素材，建议加大预算放量测试。'
+        })
+    
+    # 2. CTR分析
+    if show > 5000:
+        if ctr >= 2.0:
+            diagnosis.append({
+                'type': 'success',
+                'tag': '高点击',
+                'text': f'CTR达{ctr:.2f}%，素材前3秒吸引力强，建议拆解钩子话术复用到其他素材。'
+            })
+        elif ctr < 0.3:
+            diagnosis.append({
+                'type': 'warning',
+                'tag': '点击率低',
+                'text': f'CTR仅{ctr:.2f}%，素材封面或开头3秒缺乏吸引力，建议优化首帧画面或文案钩子。'
+            })
+    
+    # 3. 数据量判断
+    if show < 1000:
+        diagnosis.append({
+            'type': 'info',
+            'tag': '数据不足',
+            'text': '展示量不足，数据样本太少难以判断真实表现，建议增加预算或放开定向积累数据。'
+        })
+    
+    # 4. 审核状态
+    if review_status == '审核不通过':
+        diagnosis.append({
+            'type': 'error',
+            'tag': '卡审',
+            'text': '素材审核不通过，建议检查画面中的敏感元素、文案极限词或医疗/金融相关表述。'
+        })
+    
+    # 5. 分级匹配度
+    if grade == 'S' and cost < 5000:
+        diagnosis.append({
+            'type': 'info',
+            'tag': 'S级判断',
+            'text': '当前分级为S但消耗不算最高，可能是因为同项目内其他素材表现更优。建议观察后续放量后的稳定性。'
+        })
+    elif grade == 'C' and conversion_cost < 200:
+        diagnosis.append({
+            'type': 'info',
+            'tag': '误判可能',
+            'text': '分级为C但转化成本不算高，可能是因为消耗量低导致分级偏低，建议积累更多数据后重新评估。'
+        })
+    
+    # 6. 综合建议
+    if not diagnosis:
+        if cost > 0:
+            diagnosis.append({
+                'type': 'info',
+                'tag': '表现平稳',
+                'text': '素材表现中规中矩，建议继续观察或微调文案/画面后测试新版本。'
+            })
+        else:
+            diagnosis.append({
+                'type': 'info',
+                'tag': '无消耗',
+                'text': '素材暂无消耗数据，可能是新建素材或已暂停，建议检查投放状态。'
+            })
+    
+    return diagnosis
+
+
 @app.route('/api/projects/<int:pid>/accounts', methods=['GET'])
 def list_accounts(pid):
     """项目下账户列表"""
@@ -1078,9 +1451,121 @@ def recommend_materials(pid):
     })
 
 
+# ========== AI 对话 ==========
+
+def _build_material_prompt(materials, user_question):
+    """将素材数据 + 用户问题组装为 DeepSeek prompt"""
+    lines = []
+    lines.append("你是一位资深的巨量引擎广告投放优化师，擅长素材经营分析。")
+    lines.append("以下是我选中的素材数据（JSON格式），请根据我的问题给出专业、简洁、可执行的分析建议。")
+    lines.append("")
+    lines.append("素材数据：")
+    for i, m in enumerate(materials, 1):
+        lines.append(f"--- 素材{i} ---")
+        lines.append(f"名称: {m.get('material_name', '-')}")
+        lines.append(f"分级: {m.get('grade', '-')}")
+        lines.append(f"消耗: {m.get('cost', 0)}")
+        lines.append(f"展示: {m.get('show', 0)}")
+        lines.append(f"点击: {m.get('click', 0)}")
+        lines.append(f"点击率: {m.get('ctr', 0)}%")
+        lines.append(f"转化数: {m.get('conversion', 0)}")
+        lines.append(f"转化成本: {m.get('conversion_cost', 0)}")
+        lines.append(f"审核状态: {m.get('review_status', '-')}")
+        if m.get('actor'):
+            lines.append(f"演员: {m.get('actor')}")
+        if m.get('bd'):
+            lines.append(f"BD: {m.get('bd')}")
+        if m.get('product'):
+            lines.append(f"产品: {m.get('product')}")
+        lines.append("")
+    lines.append(f"我的问题：{user_question}")
+    lines.append("")
+    lines.append("请用以下格式回答：")
+    lines.append("1. 整体分析（2-3句话概括）")
+    lines.append("2. 逐条点评（每条素材1-2句，指出亮点或问题）")
+    lines.append("3. 优化建议（3条以内可执行建议）")
+    return "\n".join(lines)
+
+
+@app.route('/api/projects/<int:pid>/ai-chat', methods=['POST'])
+def ai_chat(pid):
+    """AI大模型对话：基于素材数据回答用户问题。"""
+    if not is_ai_configured():
+        return jsonify({
+            'error': '未配置 AI_API_KEY 环境变量，请在本地 .env 或 Serverless 平台环境变量中配置。'
+        }), 500
+
+    data = request.get_json() or {}
+    material_ids = data.get('material_ids', [])
+    user_question = data.get('question', '').strip()
+
+    if not user_question:
+        return jsonify({'error': '请输入问题'}), 400
+
+    if not material_ids:
+        return jsonify({'error': '请至少选择一条素材'}), 400
+
+    if len(material_ids) > 20:
+        return jsonify({'error': '一次最多分析20条素材'}), 400
+
+    # 获取素材数据
+    conn = get_db()
+    placeholders = ','.join('?' * len(material_ids))
+    cur = conn.execute(f"""
+        SELECT m.*, a.account_name, a.campaign_purpose, a.account_id as acc_id,
+               t.video_code, t.price_point, t.product, t.actor, t.bd, t.copywriting
+        FROM materials m
+        JOIN accounts a ON m.account_id = a.id
+        LEFT JOIN material_tags t ON t.material_id = m.id
+        WHERE m.id IN ({placeholders}) AND a.project_id=?
+    """, material_ids + [pid])
+
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+
+    if not rows:
+        return jsonify({'error': '未找到指定素材'}), 404
+
+    # 组装 prompt，通过服务端代理调用 AI，避免 API Key 暴露到前端
+    prompt = _build_material_prompt(rows, user_question)
+
+    try:
+        reply = call_ai_chat([
+            {'role': 'system', 'content': '你是巨量引擎广告投放优化专家，精通素材分析、投放策略和转化优化。'},
+            {'role': 'user', 'content': prompt}
+        ], temperature=0.6, max_tokens=2000)
+        return jsonify({
+            'reply': reply,
+            'material_count': len(rows),
+            'model': AI_MODEL
+        })
+    except AIServiceError as e:
+        return jsonify({'error': str(e)}), 502
+
+
 if __name__ == '__main__':
+    # 自动加载 .env 文件（不依赖 python-dotenv）
+    env_path = os.path.join(os.path.dirname(__file__), '.env')
+    if os.path.exists(env_path):
+        with open(env_path, encoding='utf-8-sig') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#') and '=' in line:
+                    k, v = line.split('=', 1)
+                    k = k.strip()
+                    v = v.strip()
+                    # 去除可能残留的 BOM/控制字符
+                    k = k.replace('\ufeff', '')
+                    os.environ[k] = v
+
+    load_ai_config()
+
     print("=" * 50)
     print("  素材经营分析系统启动中...")
     print(f"  数据库: {os.path.join(os.path.dirname(__file__), 'data', 'analyzer.db')}")
+    if is_ai_configured():
+        print(f"  AI服务: ✅ 已配置（model={AI_MODEL}, base_url={AI_BASE_URL}）")
+    else:
+        print("  AI服务: ⚠️ 未配置（请设置 AI_API_KEY 环境变量；本地可写入 .env 文件）")
     print("=" * 50)
     app.run(host='0.0.0.0', port=8080, debug=False)

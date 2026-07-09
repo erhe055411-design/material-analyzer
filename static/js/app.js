@@ -9,6 +9,8 @@ const S = {
     pid: null,
     projects: [],
     overview: null,
+    pendingFile: null,
+    pendingPreview: null,
     _analysisState: null,
     _autoFilter: null
 };
@@ -17,11 +19,20 @@ const S = {
 async function api(url, opts = {}) {
     opts.headers = { 'Content-Type': 'application/json', ...opts.headers };
     const res = await fetch(url, opts);
+    const contentType = res.headers.get('content-type') || '';
+    const isJson = contentType.includes('application/json');
+    const payload = isJson ? await res.json() : await res.text();
+
     if (!res.ok) {
-        const err = await res.text();
-        throw new Error(err || `${res.status} ${res.statusText}`);
+        if (isJson && payload?.error) {
+            throw new Error(payload.error);
+        }
+        if (res.status === 404) {
+            throw new Error('接口不存在或后端/Serverless 函数未部署，请检查 API 路由配置。');
+        }
+        throw new Error(`请求失败：${res.status} ${res.statusText}`);
     }
-    return res.json();
+    return payload;
 }
 
 // ========== 初始化 ==========
@@ -203,6 +214,36 @@ async function clearProjectData() {
 function exportData() {
     if (!S.pid) return alert('请先选择项目');
     window.open(`/api/projects/${S.pid}/export`);
+}
+
+// 复制素材名称到剪贴板
+function copyMaterialName(event, name) {
+    event.stopPropagation();
+    if (!name || name === '-') {
+        alert('没有可复制的素材名称');
+        return;
+    }
+    // 恢复所有已隐藏的按钮，保证全局只有一个隐藏
+    document.querySelectorAll('.copy-btn.hidden').forEach(el => el.classList.remove('hidden'));
+    const btn = event.currentTarget;
+    navigator.clipboard.writeText(name).then(() => {
+        btn.classList.add('hidden');
+    }).catch(err => {
+        console.error('复制失败:', err);
+        const textarea = document.createElement('textarea');
+        textarea.value = name;
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        try {
+            document.execCommand('copy');
+            btn.classList.add('hidden');
+        } catch (e) {
+            alert('复制失败，请手动复制');
+        }
+        document.body.removeChild(textarea);
+    });
 }
 
 // ========== 项目看板 ==========
@@ -493,12 +534,36 @@ async function loadMaterials(page) {
             return;
         }
 
-        tbl.innerHTML = `<table><thead><tr>
+        // 添加AI操作栏
+        const hasItems = data.items && data.items.length > 0;
+        const aiBarHtml = hasItems ? `
+        <div class="ai-action-bar">
+            <div class="ai-action-left">
+                <input type="checkbox" class="ai-check" id="selectAll" onclick="toggleSelectAll(this)"> <label for="selectAll">全选</label>
+                <span id="selectedCount" style="margin-left:12px;color:#999;font-size:12px"></span>
+            </div>
+            <div class="ai-action-right">
+                <button class="btn btn-sm btn-ai" onclick="batchAIDiagnosis()">🤖 批量AI诊断</button>
+                <button class="btn btn-sm btn-deepseek" onclick="openAIChat()">✨ AI深度分析</button>
+            </div>
+        </div>` : '';
+
+        tbl.innerHTML = aiBarHtml + `<table><thead><tr>
+            <th style="width:30px"><input type="checkbox" id="selectAllHeader" onclick="toggleSelectAll(this)"></th>
             <th>分级</th><th>素材名称</th><th>审核状态</th><th>消耗</th><th>展示</th><th>点击</th>
-            <th>点击率</th><th>转化数</th><th>转化成本</th><th>状态</th>
+            <th>点击率</th><th>转化数</th><th>转化成本</th><th>状态</th><th style="width:80px">AI诊断</th>
         </tr></thead><tbody>${data.items.map(m => `<tr>
+            <td><input type="checkbox" class="ai-check" data-id="${m.id}" onchange="updateSelectCount()"></td>
             <td>${gradeBadge(m.grade || '-', m.is_potential, m.is_quality_grade, m.is_poor_grade)}</td>
-            <td class="td-name" title="${m.material_name || ''}">${m.material_name || '-'}</td>
+            <td class="td-name" title="${m.material_name || ''}">
+                <span class="copy-btn" onclick="copyMaterialName(event, '${(m.material_name || '').replace(/'/g, "\\'")}')" title="复制素材名称">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                    </svg>
+                </span>
+                ${m.material_name || '-'}
+            </td>
             <td>${reviewStatusBadge(m.review_status)}</td>
             <td>${fmtCost(m.cost)}</td>
             <td>${fmt(m.show)}</td>
@@ -507,6 +572,7 @@ async function loadMaterials(page) {
             <td>${fmt(m.conversion)}</td>
             <td>${fmt(m.conversion_cost)}</td>
             <td>${m.status || '-'}</td>
+            <td><button class="ai-diag-btn" onclick="singleAIDiagnosis(${m.id}, '${(m.material_name || '').replace(/'/g, "\\'")}')" title="AI智能诊断">🤖</button></td>
         </tr>`).join('')}</tbody></table>`;
 
         renderPagination(data.total, st.page);
@@ -633,7 +699,15 @@ function renderRecommendTable(items, type) {
         <tbody>${items.map((m, idx) => `<tr>
             <td><span class="rank-badge rank-${idx < 3 ? idx + 1 : ''}">${idx + 1}</span></td>
             <td>${gradeBadge(m.grade || '-', m.is_potential, m.is_quality_grade, m.is_poor_grade)}</td>
-            <td class="td-name" title="${m.material_name || ''}">${m.material_name || '-'}</td>
+            <td class="td-name" title="${m.material_name || ''}">
+                <span class="copy-btn" onclick="copyMaterialName(event, '${(m.material_name || '').replace(/'/g, "\\'")}')" title="复制素材名称">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                    </svg>
+                </span>
+                ${m.material_name || '-'}
+            </td>
             <td>${reviewStatusBadge(m.review_status)}</td>
             <td>${fmtCost(m.cost)}</td>
             <td>${fmt(m.show)}</td>
@@ -707,13 +781,198 @@ async function deleteBatch(bid, name) {
 }
 
 async function handleFile(file) {
+    if (!S.pid) {
+        document.getElementById('importResult').innerHTML = `<div class="error-box">请先选择项目后再导入数据</div>`;
+        return;
+    }
+    
+    // 第一阶段：上传文件获取预览和映射建议
+    const previewForm = new FormData();
+    previewForm.append('file', file);
+    
+    try {
+        document.getElementById('importResult').innerHTML = `<div class="loading">正在解析文件字段映射...</div>`;
+        const preview = await fetch('/api/preview', { method: 'POST', body: previewForm }).then(r => r.json());
+        
+        if (preview.error) {
+            document.getElementById('importResult').innerHTML = `<div class="error-box">${preview.error}</div>`;
+            return;
+        }
+        
+        // 显示映射浮层
+        showMappingModal(file, preview);
+    } catch (e) {
+        document.getElementById('importResult').innerHTML = `<div class="error-box">预览解析失败: ${e.message}</div>`;
+    }
+}
+
+function showMappingModal(file, preview) {
+    const allColumns = preview.columns || [];
+    const mapping = preview.field_mapping || {};
+    const details = preview.mapping_details || {};
+    const warnings = preview.warnings || [];
+    const sample = preview.sample || [];
+    
+    // 标准字段列表（按重要性排序）
+    const stdFields = [
+        { key: 'material_name', label: '素材名称', required: true },
+        { key: 'material_id', label: '素材ID' },
+        { key: 'account_id', label: '账户ID' },
+        { key: 'account_name', label: '账户名称' },
+        { key: 'campaign_name', label: '计划名称' },
+        { key: 'campaign_purpose', label: '投放目的' },
+        { key: 'cost', label: '消耗', required: true },
+        { key: 'show', label: '展示' },
+        { key: 'click', label: '点击' },
+        { key: 'ctr', label: '点击率' },
+        { key: 'conversion', label: '转化数', required: true },
+        { key: 'conversion_cost', label: '转化成本', required: true },
+        { key: 'conversion_rate', label: '转化率' },
+        { key: 'roi', label: 'ROI' },
+        { key: 'review_status', label: '审核状态' },
+        { key: 'status', label: '投放状态' },
+        { key: 'date_range', label: '日期' },
+        { key: 'material_type', label: '素材类型' },
+        { key: 'deep_conversion', label: '深度转化' },
+        { key: 'deep_conversion_cost', label: '深度转化成本' },
+        { key: 'avg_click_cost', label: '点击单价' },
+        { key: 'cpm', label: '千次展现费用' },
+    ];
+    
+    // 构建原始列标签
+    const mappedCols = new Set(Object.values(mapping));
+    const origTags = allColumns.map(col => {
+        const isMapped = mappedCols.has(col);
+        return `<span class="mapping-orig-tag ${isMapped ? 'mapped' : 'unmapped'}">${col}</span>`;
+    }).join('');
+    
+    // 构建警告提示
+    let alertHtml = '';
+    const coreMissing = stdFields.filter(f => f.required && !mapping[f.key]);
+    if (coreMissing.length > 0) {
+        alertHtml += `<div class="mapping-alert error">⚠️ 核心字段缺失：${coreMissing.map(f => f.label).join('、')} — 部分分析功能将受限</div>`;
+    }
+    const hasUnmapped = allColumns.some(c => !mappedCols.has(c));
+    if (hasUnmapped) {
+        alertHtml += `<div class="mapping-alert warn">以下原始列未匹配到标准字段，可手动映射或忽略</div>`;
+    }
+    
+    // 构建映射行
+    const mappingRows = stdFields.map(field => {
+        const currentMap = mapping[field.key] || '';
+        const detail = details[field.key] || {};
+        const score = detail.score || 0;
+        const candidates = detail.candidates || [];
+        
+        // 下拉选项：空 + 所有原始列
+        const options = [`<option value="">-- 不映射 --</option>`,
+            ...allColumns.map(col => {
+                const selected = col === currentMap ? 'selected' : '';
+                const isRecommended = candidates.some(c => c.column === col);
+                const indicator = isRecommended ? ' ★' : '';
+                return `<option value="${col.replace(/"/g, '&quot;')}" ${selected}>${col}${indicator}</option>`;
+            })
+        ].join('');
+        
+        let scoreClass = 'low';
+        if (score >= 80) scoreClass = 'high';
+        else if (score >= 40) scoreClass = 'mid';
+        
+        const scoreText = currentMap ? (score >= 100 ? '精确匹配' : `置信度 ${Math.round(score)}%`) : '未匹配';
+        
+        return `
+        <div class="mapping-row">
+            <div class="mapping-field-label ${field.required ? 'required' : ''}">${field.label}</div>
+            <select class="mapping-select ${!currentMap ? 'unmapped' : ''}" data-field="${field.key}" id="map-${field.key}">
+                ${options}
+            </select>
+            <div class="mapping-score ${scoreClass}">${scoreText}</div>
+        </div>
+        `;
+    }).join('');
+    
+    // 样本数据
+    const sampleHtml = sample.length > 0 
+        ? `<div class="mapping-sample">
+            <h4>数据样本（前3行）</h4>
+            <pre>${JSON.stringify(sample.slice(0, 3), null, 2)}</pre>
+        </div>` 
+        : '';
+    
+    // 组装浮层
+    const modalHtml = `
+    <div class="mapping-overlay" id="mappingOverlay">
+        <div class="mapping-modal">
+            <div class="mapping-header">
+                <h3>📋 字段映射确认 — ${file.name} (${preview.total_rows} 行)</h3>
+                <button class="close-btn" onclick="closeMappingModal()">&times;</button>
+            </div>
+            <div class="mapping-body">
+                ${alertHtml}
+                <div class="mapping-section-title">原始列列表</div>
+                <div class="mapping-orig-cols">${origTags}</div>
+                <div class="mapping-section-title">标准字段映射</div>
+                <div style="font-size:12px;color:#999;margin-bottom:8px;">★ = 系统推荐匹配项，带 * 为核心字段</div>
+                ${mappingRows}
+                ${sampleHtml}
+            </div>
+            <div class="mapping-footer">
+                <div style="font-size:12px;color:#999;">检测到 ${allColumns.length} 个原始列，已匹配 ${Object.keys(mapping).length} 个标准字段</div>
+                <div class="btn-group">
+                    <button class="btn" onclick="closeMappingModal()">取消</button>
+                    <button class="btn btn-primary" onclick="confirmMappingAndImport()">✅ 确认导入</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    `;
+    
+    // 插入到页面
+    document.body.insertAdjacentHTML('beforeend', modalHtml);
+    
+    // 存储当前文件和预览数据供确认时使用
+    S.pendingFile = file;
+    S.pendingPreview = preview;
+}
+
+function closeMappingModal() {
+    const overlay = document.getElementById('mappingOverlay');
+    if (overlay) overlay.remove();
+    S.pendingFile = null;
+    S.pendingPreview = null;
+    document.getElementById('importResult').innerHTML = '';
+}
+
+async function confirmMappingAndImport() {
+    if (!S.pendingFile || !S.pendingPreview) return;
+    
+    // 收集用户选择的映射
+    const userMapping = {};
+    document.querySelectorAll('.mapping-select').forEach(select => {
+        const field = select.dataset.field;
+        const value = select.value;
+        if (value) {
+            userMapping[field] = value;
+        }
+    });
+    
+    // 构建导入请求
     const form = new FormData();
-    form.append('file', file);
+    form.append('file', S.pendingFile);
     form.append('project_id', S.pid || '');
+    form.append('mapping_override', JSON.stringify(userMapping));
+    
+    document.getElementById('importResult').innerHTML = `<div class="loading">正在导入数据...</div>`;
+    closeMappingModal();
+    
     try {
         const data = await fetch('/api/import', { method: 'POST', body: form }).then(r => r.json());
+        if (data.error) {
+            document.getElementById('importResult').innerHTML = `<div class="error-box">导入失败: ${data.error}</div>`;
+            return;
+        }
         document.getElementById('importResult').innerHTML = `
-            <div class="success-box">✅ 导入成功！共导入 ${data.rows_imported || data.count || 0} 条素材
+            <div class="success-box">✅ 导入成功！共导入 ${data.rows_imported || 0} 条素材
                 <button class="btn btn-sm" onclick="S.overview=null;goTo('dashboard')">查看看板</button>
             </div>`;
         loadProjects();
@@ -798,4 +1057,231 @@ async function useRule(rid) {
         S.overview = null;
         render();
     } catch (e) { alert(e.message); }
+}
+
+// ========== AI智能诊断 ==========
+function toggleSelectAll(checkbox) {
+    const checked = checkbox.checked;
+    document.querySelectorAll('.ai-check[data-id]').forEach(cb => {
+        cb.checked = checked;
+    });
+    updateSelectCount();
+}
+
+function updateSelectCount() {
+    const count = document.querySelectorAll('.ai-check[data-id]:checked').length;
+    const el = document.getElementById('selectedCount');
+    if (el) {
+        el.textContent = count > 0 ? `已选 ${count} 条` : '';
+    }
+}
+
+async function singleAIDiagnosis(materialId, materialName) {
+    if (!S.pid) return alert('请先选择项目');
+    await runAIDiagnosis([materialId], [materialName || '素材']);
+}
+
+async function batchAIDiagnosis() {
+    if (!S.pid) return alert('请先选择项目');
+    const checked = document.querySelectorAll('.ai-check[data-id]:checked');
+    if (checked.length === 0) {
+        alert('请至少选择一条素材');
+        return;
+    }
+    if (checked.length > 20) {
+        alert('一次最多诊断20条素材，请减少选择数量');
+        return;
+    }
+    const ids = Array.from(checked).map(cb => parseInt(cb.dataset.id));
+    await runAIDiagnosis(ids);
+}
+
+async function runAIDiagnosis(materialIds, names) {
+    try {
+        // 显示加载中
+        showAIDiagnosisModal(null, 'loading');
+        
+        const data = await api(`/api/projects/${S.pid}/ai-diagnosis`, {
+            method: 'POST',
+            body: JSON.stringify({ material_ids: materialIds })
+        });
+        
+        if (data.error) {
+            throw new Error(data.error);
+        }
+        
+        showAIDiagnosisModal(data, 'result');
+    } catch (e) {
+        alert('AI诊断失败: ' + e.message);
+        closeAIDiagnosisModal();
+    }
+}
+
+function showAIDiagnosisModal(data, mode) {
+    closeAIDiagnosisModal();
+    // items 必须在 if/else 外部定义，否则 loading 模式下 1158 行 title 引用会报错
+    const items = (mode === 'loading') ? [] : (Array.isArray(data) ? data : (data.items || []));
+
+    let bodyHtml = '';
+    if (mode === 'loading') {
+        bodyHtml = `<div class="loading">🤖 AI正在分析素材数据...</div>`;
+    } else {
+        const sourceHint = !Array.isArray(data) && data.source === 'local_rules'
+            ? '<div class="ai-source-hint">当前使用本地规则诊断；如需大模型结果，请在后端/Serverless 环境变量中配置 AI_API_KEY。</div>'
+            : '';
+        const warningHint = !Array.isArray(data) && data.warning
+            ? `<div class="ai-source-hint warning">${data.warning}</div>`
+            : '';
+        bodyHtml = sourceHint + warningHint + items.map(item => {
+            const diagPoints = item.diagnosis.map(d => `
+                <div class="ai-diag-point ${d.type}">
+                    <span class="tag">${d.tag}</span>
+                    ${d.text}
+                </div>
+            `).join('');
+            
+            return `
+            <div class="ai-diag-item">
+                <div class="ai-diag-title">
+                    <span class="copy-btn" onclick="copyMaterialName(event, '${(item.material_name || '').replace(/'/g, "\\'")}')" title="复制素材名称">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                        </svg>
+                    </span>
+                    ${item.material_name || '未命名素材'}
+                </div>
+                <div class="ai-diag-list">${diagPoints}</div>
+            </div>`;
+        }).join('');
+    }
+    
+    const title = mode === 'loading' ? '🤖 AI智能诊断' : `🤖 AI诊断结果 (${items.length}条素材)`;
+    
+    const modalHtml = `
+    <div class="ai-modal-overlay" id="aiDiagnosisOverlay">
+        <div class="ai-modal">
+            <div class="ai-modal-header">
+                <h3>${title}</h3>
+                <button class="close-btn" onclick="closeAIDiagnosisModal()">&times;</button>
+            </div>
+            <div class="ai-modal-body">
+                ${bodyHtml}
+            </div>
+            <div class="ai-modal-footer">
+                <button class="btn" onclick="closeAIDiagnosisModal()">关闭</button>
+            </div>
+        </div>
+    </div>
+    `;
+    
+    document.body.insertAdjacentHTML('beforeend', modalHtml);
+}
+
+function closeAIDiagnosisModal() {
+    const overlay = document.getElementById('aiDiagnosisOverlay');
+    if (overlay) overlay.remove();
+}
+
+// ========== DeepSeek AI 深度分析 ==========
+
+function openAIChat() {
+    if (!S.pid) return alert('请先选择项目');
+    const checked = document.querySelectorAll('.ai-check[data-id]:checked');
+    if (checked.length === 0) {
+        alert('请至少选择一条素材');
+        return;
+    }
+    if (checked.length > 20) {
+        alert('一次最多分析20条素材，请减少选择数量');
+        return;
+    }
+
+    closeAIChatModal();
+    const ids = Array.from(checked).map(cb => parseInt(cb.dataset.id));
+
+    const modalHtml = `
+    <div class="ai-modal-overlay" id="aiChatOverlay">
+        <div class="ai-modal ai-chat-modal">
+            <div class="ai-modal-header">
+                <h3>✨ AI深度分析 (${ids.length}条素材)</h3>
+                <button class="close-btn" onclick="closeAIChatModal()">&times;</button>
+            </div>
+            <div class="ai-modal-body">
+                <div class="ai-chat-suggestions">
+                    <button class="suggestion-chip" onclick="document.getElementById('aiChatInput').value=this.textContent">分析这些素材的整体表现，哪些值得继续放量？</button>
+                    <button class="suggestion-chip" onclick="document.getElementById('aiChatInput').value=this.textContent">哪些素材的转化成本偏高，可能的原因是什么？</button>
+                    <button class="suggestion-chip" onclick="document.getElementById('aiChatInput').value=this.textContent">给我素材优化的具体建议</button>
+                    <button class="suggestion-chip" onclick="document.getElementById('aiChatInput').value=this.textContent">分析点击率和转化率的关系，找出问题素材</button>
+                </div>
+                <div class="ai-chat-result" id="aiChatResult">
+                    <div class="ai-chat-placeholder">选择上方问题或在下方输入你的问题，AI将基于选中素材数据进行分析</div>
+                </div>
+            </div>
+            <div class="ai-modal-footer ai-chat-input-bar">
+                <input type="text" id="aiChatInput" class="ai-chat-input" placeholder="输入你的分析问题..." onkeydown="if(event.key==='Enter')sendAIChat()">
+                <button class="btn btn-deepseek" id="aiChatSendBtn" onclick="sendAIChat(${JSON.stringify(ids)})">发送</button>
+            </div>
+        </div>
+    </div>
+    `;
+    document.body.insertAdjacentHTML('beforeend', modalHtml);
+}
+
+function closeAIChatModal() {
+    const overlay = document.getElementById('aiChatOverlay');
+    if (overlay) overlay.remove();
+}
+
+async function sendAIChat(materialIds) {
+    const input = document.getElementById('aiChatInput');
+    const question = (input?.value || '').trim();
+    if (!question) return alert('请输入问题');
+
+    const ids = materialIds || (() => {
+        const checked = document.querySelectorAll('.ai-check[data-id]:checked');
+        return Array.from(checked).map(cb => parseInt(cb.dataset.id));
+    })();
+
+    if (!ids.length) return alert('请至少选择一条素材');
+
+    const resultDiv = document.getElementById('aiChatResult');
+    const sendBtn = document.getElementById('aiChatSendBtn');
+
+    resultDiv.innerHTML = '<div class="ai-chat-loading"><div class="spinner"></div>AI正在分析素材数据，请稍候...</div>';
+    if (sendBtn) { sendBtn.disabled = true; sendBtn.textContent = '分析中...'; }
+
+    try {
+        const data = await api(`/api/projects/${S.pid}/ai-chat`, {
+            method: 'POST',
+            body: JSON.stringify({ material_ids: ids, question: question })
+        });
+
+        if (data.error) {
+            throw new Error(data.error);
+        }
+
+        resultDiv.innerHTML = `<div class="ai-chat-reply">${formatAIReply(data.reply)}</div>`;
+    } catch (e) {
+        resultDiv.innerHTML = `<div class="ai-chat-error">❌ ${e.message}</div>`;
+    } finally {
+        if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = '发送'; }
+        input.value = '';
+    }
+}
+
+function formatAIReply(text) {
+    if (!text) return '';
+    let html = text
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+    html = html
+        .replace(/^### (.+)$/gm, '<h4 class="ai-reply-h">$1</h4>')
+        .replace(/^## (.+)$/gm, '<h4 class="ai-reply-h">$1</h4>')
+        .replace(/^# (.+)$/gm, '<h4 class="ai-reply-h">$1</h4>')
+        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        .replace(/^\d+\.\s/gm, '<br>$&')
+        .replace(/\n/g, '<br>');
+    return html;
 }
