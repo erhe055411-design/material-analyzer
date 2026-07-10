@@ -62,6 +62,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         updateProjectButtons();
         render();
     });
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') closeGlobalAIAssistant();
+    });
     // 加载项目列表
     await loadProjects();
     render();
@@ -1532,77 +1535,77 @@ function formatAIReply(text) {
 // ========== 全局AI助手 ==========
 
 const AI_PAGE_SUGGESTIONS = {
+    import: {
+        label: '数据导入',
+        icon: '📥',
+        suggestions: [
+            '检查这批导入数据有没有异常',
+            '哪些字段缺失会影响分析？',
+            '帮我识别重复素材和异常值',
+            '生成一份导入校验报告',
+            '导入失败怎么快速排查？'
+        ]
+    },
     dashboard: {
-        label: '项目看板',
+        label: '经营概览',
         icon: '📊',
         suggestions: [
-            '分析当前项目的整体投放表现',
-            '哪些账户或投放目的表现最好？',
-            'S级和A级素材有什么共同特点？',
-            '潜力素材值得放量测试吗？',
-            '给我优化建议'
+            '今天盘面最大问题是什么？',
+            '哪些指标正在拖累转化？',
+            '给我3条优先优化动作',
+            '生成老板能看懂的复盘总结',
+            '哪些素材应该放量或止损？'
         ]
     },
     analysis: {
-        label: '素材分析',
+        label: '素材诊断',
         icon: '📈',
         suggestions: [
-            '分析当前筛选条件下的素材表现',
-            '哪些素材转化成本偏高，原因是什么？',
-            '这些素材中哪些值得继续放量？',
-            '给我素材优化的具体建议',
-            '分析点击率和转化率的关系'
+            '找出高消耗无转化素材',
+            '列出可复制放量素材',
+            '生成停投建议清单',
+            '分析低CTR素材共性',
+            '按当前筛选给我优化动作'
         ],
         checked_suggestions: [
             '分析这{n}条素材的共性特征',
-            '这些素材中哪些值得继续放量？',
-            '这{n}条素材的转化成本对比分析',
-            '给这{n}条素材优化建议',
-            '这{n}条素材中哪些应该停投？'
+            '这{n}条里哪些值得复制放量？',
+            '这{n}条素材的CPA风险排序',
+            '给这{n}条素材生成处理动作',
+            '这{n}条素材哪些应该降预算或停投？'
         ]
     },
     recommend: {
         label: '推荐上新',
         icon: '🆕',
         suggestions: [
-            '增量系列素材有哪些亮点？',
-            '稳量系列为什么适合持续投放？',
-            '潜力测试系列值得加大预算吗？',
-            '这三类素材的投放策略有什么区别？',
-            '给我推荐上新建议'
-        ]
-    },
-    import: {
-        label: '数据导入',
-        icon: '📥',
-        suggestions: [
-            '导入数据后如何快速分析？',
-            '字段映射有哪些注意事项？',
-            '数据格式有什么要求？',
-            '如何批量导入多个文件？',
-            '导入失败怎么排查？'
+            '解释这批推荐上新的理由',
+            '生成明日上新计划',
+            '整理可复用素材方向',
+            '列出推荐素材的风险点',
+            '把上新建议整理成执行清单'
         ]
     },
     tags: {
         label: '剪辑BD分析',
         icon: '👥',
         suggestions: [
-            '哪个剪辑的素材表现最好？',
-            'BD维度有哪些投放规律？',
-            '剪辑和BD的组合效果分析',
-            '给我剪辑优化建议',
-            'BD团队绩效怎么看？'
+            '哪个剪辑最值得加量？',
+            '哪个BD素材转化质量最好？',
+            '找出高效剪辑BD组合',
+            '给剪辑团队优化建议',
+            '生成BD团队复盘口径'
         ]
     },
     rules: {
         label: '分级规则',
         icon: '⚙️',
         suggestions: [
-            '当前分级规则如何理解？',
-            'S/A/B/C的分级逻辑是什么？',
-            '如何自定义分级阈值？',
-            '潜力/优质/劣质的判定标准？',
-            '规则调整后如何重新分级？'
+            '当前分级规则怎么理解？',
+            'S/A/B/C分别该怎么处理？',
+            '潜力素材应该如何测试？',
+            '优质和劣质的判定依据是什么？',
+            '规则调整后会影响哪些动作？'
         ]
     }
 };
@@ -1615,6 +1618,7 @@ function openGlobalAIAssistant() {
     updateAIAssistantContext();
     // 加载历史聊天记录
     renderAIChatHistory();
+    setTimeout(() => document.getElementById('aiAssistantInput')?.focus(), 80);
 }
 
 function closeGlobalAIAssistant() {
