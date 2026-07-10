@@ -1851,7 +1851,17 @@ _PAGE_PROMPT_TEMPLATES = {
 def _build_general_ai_prompt(page_context, question, project_data=None, material_data=None):
     """根据页面上下文组装通用AI对话prompt。"""
     template = _PAGE_PROMPT_TEMPLATES.get(page_context, _PAGE_PROMPT_TEMPLATES['dashboard'])
-    prompt = template.format(question=question)
+    page_prompt = template.format(question=question)
+    prompt = f"""你是一个专业、稳健的职场 AI 助手，同时熟悉巨量引擎投放、素材分析和数据复盘。
+
+用户当前所在页面上下文只是【可选参考】，不能限制你的回答范围。请先判断用户问题类型：
+1. 如果问题和当前页面、投放数据、素材诊断、推荐上新、分级规则等业务场景相关：优先结合页面上下文和下方数据，给出专业、可执行的投放建议。
+2. 如果问题是通用办公、写作、沟通、Excel、数据分析方法、概念解释，或明显与当前页面无关：请正常回答用户的问题，不要强行套用当前页面数据，也不要反复说“基于当前页面”。
+3. 如果问题既可以泛化回答、也可以结合页面：先给通用结论，再补充“结合当前页面可以怎么做”。
+4. 如果页面数据不足以回答业务问题：明确说明缺少什么数据，并给出可操作的下一步。
+
+当前页面参考信息如下：
+{page_prompt}"""
 
     # 如果有项目数据，追加到prompt
     if project_data:
@@ -1943,7 +1953,7 @@ def ai_chat_general(pid):
 
     try:
         reply = call_ai_chat([
-            {'role': 'system', 'content': '你是巨量引擎广告投放优化专家，精通素材分析、投放策略和转化优化。请给出专业、简洁、可执行的建议。'},
+            {'role': 'system', 'content': '你是专业、稳健的职场 AI 助手，并熟悉巨量引擎广告投放优化。请根据用户真实问题回答：业务问题结合页面数据，非业务或非页面问题正常作为通用助手回答，保持简洁、清楚、可执行。'},
             {'role': 'user', 'content': prompt}
         ], temperature=0.6, max_tokens=2000)
         return jsonify({
