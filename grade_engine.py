@@ -1,325 +1,354 @@
-"""素材分级引擎 - 以消耗+转化数+转化成本为核心指标，含潜力/优质/劣质素材识别"""
-import json
+"""素材分级引擎 - 投手决策导向：目标CPA、样本充分度、止损线、潜力信号"""
+
 from models import get_db
 
 
-def get_default_rules():
-    """获取默认分级规则"""
-    conn = get_db()
-    cur = conn.execute("SELECT * FROM grade_rules WHERE is_default=1 LIMIT 1")
-    row = cur.fetchone()
-    conn.close()
-    if row:
-        return dict(row)
-    return {
-        's_cost_pct': 10.0, 's_conv_cost_max': 0, 's_conversion_min': 3,
-        'a_cost_pct': 30.0, 'a_conv_cost_max': 0, 'a_conversion_min': 1,
-        'b_has_conversion': 1, 'b_conv_cost_max': 0,
-        'c_max_cost': 50.0,
-        'potential_cost_max': 500.0,
-        'potential_ctr_mult': 1.5,
-        'potential_min_show': 1000,
-        'potential_min_click': 20,
-    }
+def _num(value, default=0):
+    """安全转数值，兼容数据库空值/字符串。"""
+    try:
+        if value is None or value == '':
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 
-def get_all_rules():
-    """获取所有分级规则"""
-    conn = get_db()
-    cur = conn.execute("SELECT * FROM grade_rules ORDER BY is_default DESC, created_at DESC")
-    rows = cur.fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+def _positive(value):
+    value = _num(value, 0)
+    return value if value > 0 else None
 
 
-def update_rules(rule_id, **kwargs):
-    """更新分级规则"""
-    conn = get_db()
-    sets = []
-    vals = []
-    allowed = ('name', 's_cost_pct', 's_conv_cost_max', 's_conversion_min',
-               'a_cost_pct', 'a_conv_cost_max', 'a_conversion_min',
-               'b_has_conversion', 'b_conv_cost_max', 'c_max_cost', 'is_default',
-               'potential_cost_max', 'potential_ctr_mult', 'potential_min_show', 'potential_min_click')
-    for k, v in kwargs.items():
-        if k in allowed:
-            sets.append(f"{k}=?")
-            vals.append(v)
-    if not sets:
-        return
-    vals.append(rule_id)
-    conn.execute(f"UPDATE grade_rules SET {', '.join(sets)} WHERE id=?", vals)
-    conn.commit()
-    conn.close()
+DEFAULT_RULES = {
+    'name': '专业投放分级规则',
+    'target_cpa': 0,
+    'min_sample_cost': 300,
+    'stop_loss_cost': 800,
+    's_cost_pct': 30,
+    's_conversion_min': 3,
+    's_cpa_ratio': 1.0,
+    'a_cost_pct': 50,
+    'a_conversion_min': 1,
+    'a_cpa_ratio': 1.2,
+    'b_conversion_min': 1,
+    'b_cpa_ratio': 1.6,
+    'potential_cost_max': 300,
+    'potential_ctr_min': 0,
+    'potential_click_min': 20,
+    'potential_cpc_ratio': 1.2,
+}
 
 
-def create_rules(name, **kwargs):
-    """创建新分级规则"""
-    conn = get_db()
-    defaults = get_default_rules()
-    fields = {
-        'name': name,
-        's_cost_pct': kwargs.get('s_cost_pct', defaults['s_cost_pct']),
-        's_conv_cost_max': kwargs.get('s_conv_cost_max', defaults.get('s_conv_cost_max', 0)),
-        's_conversion_min': kwargs.get('s_conversion_min', defaults['s_conversion_min']),
-        'a_cost_pct': kwargs.get('a_cost_pct', defaults['a_cost_pct']),
-        'a_conv_cost_max': kwargs.get('a_conv_cost_max', defaults.get('a_conv_cost_max', 0)),
-        'a_conversion_min': kwargs.get('a_conversion_min', defaults['a_conversion_min']),
-        'b_has_conversion': kwargs.get('b_has_conversion', defaults['b_has_conversion']),
-        'b_conv_cost_max': kwargs.get('b_conv_cost_max', defaults.get('b_conv_cost_max', 0)),
-        'c_max_cost': kwargs.get('c_max_cost', defaults['c_max_cost']),
-        'is_default': 0,
-        'potential_cost_max': kwargs.get('potential_cost_max', defaults.get('potential_cost_max', 500)),
-        'potential_ctr_mult': kwargs.get('potential_ctr_mult', defaults.get('potential_ctr_mult', 1.5)),
-        'potential_min_show': kwargs.get('potential_min_show', defaults.get('potential_min_show', 1000)),
-        'potential_min_click': kwargs.get('potential_min_click', defaults.get('potential_min_click', 20)),
-    }
-    cols = ', '.join(fields.keys())
-    placeholders = ', '.join(['?'] * len(fields))
-    conn.execute(f"INSERT INTO grade_rules ({cols}) VALUES ({placeholders})", list(fields.values()))
-    conn.commit()
-    conn.close()
-
-
-def delete_rules(rule_id):
-    """删除分级规则（不可删默认）"""
-    conn = get_db()
-    cur = conn.execute("SELECT is_default FROM grade_rules WHERE id=?", (rule_id,))
-    row = cur.fetchone()
-    if row and row['is_default']:
-        conn.close()
-        raise ValueError("不能删除默认规则")
-    conn.execute("DELETE FROM grade_rules WHERE id=?", (rule_id,))
-    conn.commit()
-    conn.close()
-
-
-def _calc_project_stats(materials):
-    """计算项目级统计指标，用于分级和优质/劣质判断"""
+def compute_project_stats(materials):
+    """计算项目级统计指标，用于动态阈值。"""
     if not materials:
         return {}
-    costs = [m.get('cost', 0) for m in materials]
-    shows = [m.get('show', 0) for m in materials]
-    clicks = [m.get('click', 0) for m in materials]
-    ctrs = [m.get('ctr', 0) for m in materials if m.get('show', 0) > 0]
+
+    costs = [m.get('cost', 0) or 0 for m in materials]
+    conversions = [m.get('conversion', 0) or 0 for m in materials]
+    clicks = [m.get('click', 0) or 0 for m in materials]
+    ctrs = [m.get('ctr', 0) or 0 for m in materials]
+
+    conv_costs = []
+    for m in materials:
+        conv = m.get('conversion', 0) or 0
+        cost = m.get('cost', 0) or 0
+        if conv > 0:
+            conv_cost = m.get('conversion_cost') or cost / conv
+            if conv_cost > 0:
+                conv_costs.append(conv_cost)
+
+    def percentile(data, p):
+        if not data:
+            return 0
+        data = sorted(data)
+        k = (len(data) - 1) * p / 100
+        f = int(k)
+        c = min(f + 1, len(data) - 1)
+        if f == c:
+            return data[f]
+        return data[f] * (c - k) + data[c] * (k - f)
 
     total_cost = sum(costs)
-    total_show = sum(shows)
     total_click = sum(clicks)
-
-    # 项目平均点击率
-    avg_ctr = (total_click / total_show * 100) if total_show > 0 else 0
-
-    # 有消耗素材的中位数消耗
-    cost_vals = sorted([c for c in costs if c > 0])
-    median_cost = cost_vals[len(cost_vals) // 2] if cost_vals else 0
-
-    # 有转化素材的转化成本中位数
-    conv_costs = sorted([m.get('conversion_cost', 0) for m in materials
-                         if m.get('conversion', 0) > 0 and m.get('conversion_cost', 0) > 0])
-    median_conv_cost = conv_costs[len(conv_costs) // 2] if conv_costs else 0
-
-    # 有消耗素材的消耗中位数（用于优质/劣质判断，比均值更抗长尾干扰）
-    median_cost_all = cost_vals[len(cost_vals) // 2] if cost_vals else 0
+    avg_cpc = total_cost / total_click if total_click > 0 else 0
 
     return {
-        'avg_ctr': avg_ctr,
-        'median_cost': median_cost,
-        'median_conv_cost': median_conv_cost,
-        'median_cost_all': median_cost_all,
+        'cost_p10': percentile(costs, 90),
+        'cost_p30': percentile(costs, 70),
+        'cost_p50': percentile(costs, 50),
+        'cost_p70': percentile(costs, 30),
+        'conv_cost_p50': percentile(conv_costs, 50),
+        'conv_cost_p80': percentile(conv_costs, 80),
+        'avg_ctr': sum(ctrs) / len(ctrs) if ctrs else 0,
+        'avg_cpc': avg_cpc,
         'total_materials': len(materials),
+        'total_cost': total_cost,
+        'total_conversion': sum(conversions),
     }
 
 
-def compute_grades(materials, rules=None):
-    """
-    对素材列表计算分级 + 潜力/优质/劣质标记
-    
-    核心逻辑：
-    - S/A/B/C 四级：基于消耗+转化数+转化成本
-    - P(潜力)：低消耗但有效果信号，值得放量测试
-    - 优质：消耗>中位数 AND 有转化 AND 转化成本<中位数
-    - 劣质：消耗>中位数 AND（零转化 OR 转化成本>中位数×2）
-    """
-    if not materials:
-        return materials
+def normalize_rules(rules, stats=None):
+    """合并默认规则，并根据项目数据补齐动态阈值。"""
+    merged = DEFAULT_RULES.copy()
+    if rules:
+        merged.update({k: v for k, v in dict(rules).items() if v is not None})
 
-    if rules is None:
-        rules = get_default_rules()
+    stats = stats or {}
+    target_cpa = _positive(merged.get('target_cpa')) or _positive(stats.get('conv_cost_p50')) or 0
+    min_sample_cost = _positive(merged.get('min_sample_cost')) or max(target_cpa or 0, _num(stats.get('cost_p50'), 0), 300)
+    stop_loss_cost = _positive(merged.get('stop_loss_cost')) or max(min_sample_cost * 2, (target_cpa or min_sample_cost) * 2)
+    potential_cost_max = _positive(merged.get('potential_cost_max')) or min_sample_cost
+    potential_ctr_min = _positive(merged.get('potential_ctr_min')) or (_num(stats.get('avg_ctr'), 0) * 1.2)
 
-    n = len(materials)
-    if n == 0:
-        return materials
-
-    # 计算项目级统计
-    stats = _calc_project_stats(materials)
-    avg_ctr = stats.get('avg_ctr', 2.0)
-    median_cost = stats.get('median_cost', 100)
-    median_conv_cost = stats.get('median_conv_cost', 100)
-    median_cost_all = stats.get('median_cost_all', 0)
-
-    # 按消耗降序排序，计算消耗百分位
-    sorted_by_cost = sorted(materials, key=lambda m: m.get('cost', 0), reverse=True)
-
-    total_cost = sum(m.get('cost', 0) for m in materials)
-    cumulative = 0
-    cost_pct_map = {}
-    for m in sorted_by_cost:
-        cumulative += m.get('cost', 0)
-        pct = (cumulative / total_cost * 100) if total_cost > 0 else 0
-        key = m.get('id', id(m))
-        cost_pct_map[key] = pct
-
-    # 潜力判断参数
-    pot_cost_max = rules.get('potential_cost_max', 500)
-    pot_ctr_mult = rules.get('potential_ctr_mult', 1.5)
-    pot_min_show = rules.get('potential_min_show', 1000)
-    pot_min_click = rules.get('potential_min_click', 20)
-
-    for m in materials:
-        key = m.get('id', id(m))
-        pct = cost_pct_map.get(key, 100)
-        cost = m.get('cost', 0)
-        conv = m.get('conversion', 0)
-        conv_cost = m.get('conversion_cost', 0)
-        show = m.get('show', 0)
-        click = m.get('click', 0)
-        ctr = m.get('ctr', 0)
-        is_active = m.get('is_active', 0)
-        is_quality = m.get('is_quality', 0)
-        linked_count = m.get('linked_adgroup_count', 0)
-
-        self_pct = (cost / total_cost * 100) if total_cost > 0 else 0
-
-        grade = 'C'
-        potential = False
-        quality_grade = False
-        poor_grade = False
-
-        # ===== S级判断 =====
-        in_s_range = pct <= rules.get('s_cost_pct', 10) or self_pct > 5
-        s_conv_ok = conv >= rules.get('s_conversion_min', 3)
-        s_cost_ok = True
-        if rules.get('s_conv_cost_max', 0) > 0 and conv_cost > 0:
-            s_cost_ok = conv_cost <= rules.get('s_conv_cost_max', 0)
-
-        if in_s_range and s_conv_ok and s_cost_ok:
-            grade = 'S'
-
-        # ===== A级判断 =====
-        elif pct <= rules.get('a_cost_pct', 30) or self_pct > 2:
-            a_conv_ok = conv >= rules.get('a_conversion_min', 1)
-            a_cost_ok = True
-            if rules.get('a_conv_cost_max', 0) > 0 and conv_cost > 0:
-                a_cost_ok = conv_cost <= rules.get('a_conv_cost_max', 0)
-
-            if a_conv_ok and a_cost_ok:
-                grade = 'A'
-            elif conv > 0:
-                grade = 'B'
-            else:
-                grade = 'C'
-
-        # ===== B级判断 =====
-        elif conv > 0 and rules.get('b_has_conversion', 1):
-            b_cost_ok = True
-            if rules.get('b_conv_cost_max', 0) > 0 and conv_cost > 0:
-                b_cost_ok = conv_cost <= rules.get('b_conv_cost_max', 0)
-            if b_cost_ok:
-                grade = 'B'
-            else:
-                grade = 'C'
-
-        # ===== C级 =====
-        else:
-            if cost > rules.get('c_max_cost', 50) and conv > 0:
-                grade = 'B'
-            else:
-                grade = 'C'
-
-        # ===== 潜力素材识别（仅对B/C级低消耗素材） =====
-        if cost < pot_cost_max and grade in ('B', 'C'):
-            # 信号1：低消耗有转化（最直接的信号）
-            if conv > 0 and conv_cost > 0 and conv_cost <= median_cost * 2:
-                potential = True
-
-            # 信号2：点击率显著高于项目均值
-            elif show >= pot_min_show and ctr > avg_ctr * pot_ctr_mult:
-                potential = True
-
-            # 信号3：高点击+平台优质+在投
-            elif click >= pot_min_click and is_quality and linked_count > 0:
-                potential = True
-
-            # 信号4：有转化但成本偏高
-            elif conv > 0 and conv_cost > 0:
-                if conv_cost <= median_cost * 3:
-                    potential = True
-
-        # ===== 优质素材识别 =====
-        # 消耗>项目中位数 AND 有转化 AND 转化成本<中位数
-        if median_cost_all > 0 and median_conv_cost > 0:
-            if cost > median_cost_all and conv > 0 and conv_cost > 0 and conv_cost < median_conv_cost:
-                quality_grade = True
-
-        # ===== 劣质素材识别 =====
-        # 消耗>项目中位数 AND（零转化 OR 转化成本>中位数×2）
-        if median_cost_all > 0:
-            if cost > median_cost_all:
-                if conv == 0:
-                    poor_grade = True
-                elif conv_cost > 0 and median_conv_cost > 0 and conv_cost > median_conv_cost * 2:
-                    poor_grade = True
-
-        m['grade'] = grade
-        m['potential'] = potential
-        m['quality_grade'] = quality_grade
-        m['poor_grade'] = poor_grade
-
-    return materials
+    merged.update({
+        'target_cpa': target_cpa,
+        'min_sample_cost': min_sample_cost,
+        'stop_loss_cost': stop_loss_cost,
+        'potential_cost_max': potential_cost_max,
+        'potential_ctr_min': potential_ctr_min,
+        's_cost_pct': _num(merged.get('s_cost_pct'), 30),
+        's_conversion_min': _num(merged.get('s_conversion_min'), 3),
+        's_cpa_ratio': _num(merged.get('s_cpa_ratio'), 1.0),
+        'a_cost_pct': _num(merged.get('a_cost_pct'), 50),
+        'a_conversion_min': _num(merged.get('a_conversion_min'), 1),
+        'a_cpa_ratio': _num(merged.get('a_cpa_ratio'), 1.2),
+        'b_conversion_min': _num(merged.get('b_conversion_min'), 1),
+        'b_cpa_ratio': _num(merged.get('b_cpa_ratio'), 1.6),
+        'potential_click_min': _num(merged.get('potential_click_min'), 20),
+        'potential_cpc_ratio': _num(merged.get('potential_cpc_ratio'), 1.2),
+    })
+    return merged
 
 
-def apply_grades_to_db(project_id=None, account_id=None, rules=None):
-    """对数据库中素材重新计算分级并更新"""
+def classify_material(material, stats, rules=None):
+    """单个素材分级：S/A/B/C/P 对应放量、稳跑、优化、止损、二次测试。"""
+    rules = normalize_rules(rules, stats)
+
+    cost = _num(material.get('cost'), 0)
+    conversion = _num(material.get('conversion'), 0)
+    click = _num(material.get('click'), 0)
+    ctr = _num(material.get('ctr'), 0)
+    conversion_cost = _num(material.get('conversion_cost'), 0)
+    if conversion > 0 and conversion_cost <= 0:
+        conversion_cost = cost / conversion if conversion else 0
+    cpc = cost / click if click > 0 else 0
+
+    target_cpa = rules['target_cpa']
+    min_sample_cost = rules['min_sample_cost']
+    stop_loss_cost = rules['stop_loss_cost']
+
+    high_volume_threshold = stats.get('cost_p30', 0) if rules['s_cost_pct'] <= 30 else stats.get('cost_p50', 0)
+    mid_volume_threshold = stats.get('cost_p50', 0) if rules['a_cost_pct'] <= 50 else stats.get('cost_p70', 0)
+
+    has_target = target_cpa > 0
+    s_cpa_ok = conversion_cost > 0 and (not has_target or conversion_cost <= target_cpa * rules['s_cpa_ratio'])
+    a_cpa_ok = conversion_cost > 0 and (not has_target or conversion_cost <= target_cpa * rules['a_cpa_ratio'])
+    b_cpa_ok = conversion_cost > 0 and (not has_target or conversion_cost <= target_cpa * rules['b_cpa_ratio'])
+
+    if (conversion >= rules['s_conversion_min'] and
+            cost >= max(min_sample_cost, high_volume_threshold) and
+            s_cpa_ok):
+        return 'S'
+
+    if (conversion >= rules['a_conversion_min'] and
+            cost >= min(min_sample_cost, mid_volume_threshold or min_sample_cost) and
+            a_cpa_ok):
+        return 'A'
+
+    if cost >= stop_loss_cost and conversion <= 0:
+        return 'C'
+    if has_target and conversion > 0 and conversion_cost > target_cpa * max(rules['b_cpa_ratio'], 1.6):
+        return 'C'
+
+    if conversion >= rules['b_conversion_min'] and (b_cpa_ok or cost < min_sample_cost):
+        return 'B'
+
+    avg_cpc = _num(stats.get('avg_cpc'), 0)
+    cpc_ok = avg_cpc <= 0 or cpc <= avg_cpc * rules['potential_cpc_ratio']
+    ctr_ok = ctr >= rules['potential_ctr_min'] if rules['potential_ctr_min'] > 0 else False
+    if (cost <= rules['potential_cost_max'] and
+            click >= rules['potential_click_min'] and
+            cpc_ok and
+            (ctr_ok or conversion > 0)):
+        return 'P'
+
+    return 'C'
+
+
+def classify_quality(material, stats, rules=None):
+    """识别优质/劣质素材：用于辅助标签，不替代 S/A/B/C/P 主等级。"""
+    rules = normalize_rules(rules, stats)
+
+    cost = _num(material.get('cost'), 0)
+    conversion = _num(material.get('conversion'), 0)
+    conversion_cost = _num(material.get('conversion_cost'), 0)
+    if conversion > 0 and conversion_cost <= 0:
+        conversion_cost = cost / conversion if conversion else 0
+
+    target_cpa = rules['target_cpa']
+    min_sample_cost = rules['min_sample_cost']
+    stop_loss_cost = rules['stop_loss_cost']
+    median_conv_cost = _positive(stats.get('conv_cost_p50')) or target_cpa
+
+    candidates = [x for x in [target_cpa, median_conv_cost] if x and x > 0]
+    quality_cpa_line = min(candidates) if candidates else 0
+    if conversion > 0 and cost >= min_sample_cost and quality_cpa_line and conversion_cost <= quality_cpa_line:
+        return '优'
+
+    if cost >= stop_loss_cost and conversion <= 0:
+        return '劣'
+    if target_cpa > 0 and conversion > 0 and conversion_cost > target_cpa * 1.8:
+        return '劣'
+    if median_conv_cost and conversion > 0 and conversion_cost > median_conv_cost * 2:
+        return '劣'
+
+    return None
+
+
+def apply_grades_to_db(project_id=None, rules=None):
+    """对数据库中的素材应用分级"""
     conn = get_db()
 
-    query = """
-        SELECT m.id, m.cost, m.conversion, m.conversion_cost,
-               m.show, m.click, m.ctr, m.is_active, m.is_quality,
-               m.linked_adgroup_count
-        FROM materials m
-        JOIN accounts a ON m.account_id = a.id
-        WHERE 1=1
-    """
+    sql = "SELECT * FROM materials"
     params = []
-
     if project_id:
-        query += " AND a.project_id=?"
+        sql += " WHERE project_id=?"
         params.append(project_id)
-    if account_id:
-        query += " AND m.account_id=?"
-        params.append(account_id)
 
-    cur = conn.execute(query, params)
-    materials = [dict(r) for r in cur.fetchall()]
+    cur = conn.execute(sql, params)
+    materials = [dict(row) for row in cur.fetchall()]
 
-    if not materials:
-        conn.close()
-        return 0
-
-    graded = compute_grades(materials, rules)
+    stats = compute_project_stats(materials)
+    normalized_rules = normalize_rules(rules, stats)
     updated = 0
 
-    for m in graded:
-        pot_val = 1 if m.get('potential') else 0
-        qg_val = 1 if m.get('quality_grade') else 0
-        pg_val = 1 if m.get('poor_grade') else 0
+    for material in materials:
+        grade = classify_material(material, stats, normalized_rules)
+        quality = classify_quality(material, stats, normalized_rules)
+
+        final_grade = quality if quality == '劣' else grade
+        if quality == '优' and grade in ('S', 'A'):
+            final_grade = '优'
+
         conn.execute(
-            "UPDATE materials SET grade=?, is_potential=?, is_quality_grade=?, is_poor_grade=? WHERE id=?",
-            (m['grade'], pot_val, qg_val, pg_val, m['id'])
+            "UPDATE materials SET grade=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+            (final_grade, material['id'])
         )
         updated += 1
 
     conn.commit()
     conn.close()
     return updated
+
+
+def get_grade_summary(project_id=None):
+    """获取分级统计"""
+    conn = get_db()
+
+    sql = """
+        SELECT 
+            COALESCE(grade, '未分级') as grade,
+            COUNT(*) as count,
+            SUM(cost) as total_cost,
+            SUM(conversion) as total_conversion,
+            AVG(CASE WHEN conversion > 0 THEN conversion_cost ELSE NULL END) as avg_conv_cost,
+            AVG(ctr) as avg_ctr
+        FROM materials
+    """
+    params = []
+    if project_id:
+        sql += " WHERE project_id=?"
+        params.append(project_id)
+
+    sql += " GROUP BY grade ORDER BY CASE grade WHEN '优' THEN 0 WHEN 'S' THEN 1 WHEN 'A' THEN 2 WHEN 'B' THEN 3 WHEN 'P' THEN 4 WHEN 'C' THEN 5 WHEN '劣' THEN 6 ELSE 7 END"
+
+    cur = conn.execute(sql, params)
+    result = [dict(row) for row in cur.fetchall()]
+    conn.close()
+
+    return result
+
+
+def _rule_columns():
+    conn = get_db()
+    rows = conn.execute("PRAGMA table_info(grade_rules)").fetchall()
+    conn.close()
+    return {row['name'] for row in rows}
+
+
+def get_all_rules():
+    """获取全部分级规则。"""
+    conn = get_db()
+    cur = conn.execute("SELECT * FROM grade_rules ORDER BY is_default DESC, id ASC")
+    rules = [dict(row) for row in cur.fetchall()]
+    conn.close()
+    return rules
+
+
+def get_default_rules():
+    """获取默认规则；没有数据库规则时返回内置默认值。"""
+    conn = get_db()
+    row = conn.execute("SELECT * FROM grade_rules WHERE is_default=1 ORDER BY id ASC LIMIT 1").fetchone()
+    conn.close()
+    return dict(row) if row else DEFAULT_RULES.copy()
+
+
+def create_rules(name='新规则', **data):
+    """创建规则，只写入数据库实际存在的字段。"""
+    data = dict(data or {})
+    data.pop('id', None)
+    data['name'] = name or data.get('name') or '新规则'
+    columns = _rule_columns() - {'id', 'created_at'}
+    payload = {k: v for k, v in data.items() if k in columns}
+    if 'is_default' not in payload:
+        payload['is_default'] = 0
+    if not payload:
+        raise ValueError('没有可保存的规则字段')
+
+    keys = list(payload.keys())
+    placeholders = ','.join(['?'] * len(keys))
+    conn = get_db()
+    cur = conn.execute(
+        f"INSERT INTO grade_rules ({','.join(keys)}) VALUES ({placeholders})",
+        [payload[k] for k in keys]
+    )
+    conn.commit()
+    rid = cur.lastrowid
+    conn.close()
+    return rid
+
+
+def update_rules(rid, **data):
+    """更新规则，只更新数据库实际存在的字段。"""
+    data = dict(data or {})
+    data.pop('id', None)
+    data.pop('created_at', None)
+    columns = _rule_columns() - {'id', 'created_at'}
+    payload = {k: v for k, v in data.items() if k in columns}
+    if not payload:
+        return 0
+
+    assignments = ', '.join([f"{k}=?" for k in payload.keys()])
+    conn = get_db()
+    cur = conn.execute(
+        f"UPDATE grade_rules SET {assignments} WHERE id=?",
+        [payload[k] for k in payload.keys()] + [rid]
+    )
+    conn.commit()
+    count = cur.rowcount
+    conn.close()
+    return count
+
+
+def delete_rules(rid):
+    """删除非默认规则。"""
+    conn = get_db()
+    row = conn.execute("SELECT is_default FROM grade_rules WHERE id=?", (rid,)).fetchone()
+    if row and row['is_default']:
+        conn.close()
+        raise ValueError('默认规则不能删除')
+    cur = conn.execute("DELETE FROM grade_rules WHERE id=?", (rid,))
+    conn.commit()
+    count = cur.rowcount
+    conn.close()
+    return count

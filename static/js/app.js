@@ -1092,24 +1092,32 @@ async function renderRules() {
         const rules = await api('/api/grade-rules');
         el.innerHTML = `
         <div class="card">
-            <div class="card-title">分级规则设置</div>
+            <div class="card-title">专业投放分级规则</div>
             <div class="rule-hint">
-                <p><strong>分级判定逻辑（基于消耗+转化数+转化成本）：</strong></p>
+                <p><strong>新版逻辑：从“消耗分层”升级为“投手动作导向”。</strong></p>
                 <ul>
-                    <li><span class="gb gb-S">S</span> 消耗占项目前10% + 转化数≥3 → 核心跑量素材</li>
-                    <li><span class="gb gb-A">A</span> 消耗占项目前30% + 转化数≥1 → 稳定产出素材</li>
-                    <li><span class="gb gb-B">B</span> 有转化但消耗占比不高 → 有待提升</li>
-                    <li><span class="gb gb-C">C</span> 低消耗低转化 → 低效素材</li>
-                    <li><span class="gb gb-P">P</span> 低消耗但有转化/高CTR/平台优质等信号 → 潜力素材，建议放量测试</li>
-                    <li><span class="gb gb-Q">优</span> 消耗>中位数+有转化+成本<中位数 → 优质素材，放量主力</li>
-                    <li><span class="gb gb-BD">劣</span> 消耗>中位数+零转化或成本>2倍中位数 → 劣质素材，建议关停</li>
+                    <li><span class="gb gb-S">S</span> 可放量：样本充分 + 转化数达标 + CPA ≤ 目标CPA</li>
+                    <li><span class="gb gb-A">A</span> 稳定跑：有转化 + CPA ≤ 目标CPA × 1.2，可小幅加预算</li>
+                    <li><span class="gb gb-B">B</span> 待优化：有转化但样本/成本未达A，建议改封面、标题、定向或出价</li>
+                    <li><span class="gb gb-P">P</span> 潜力：低消耗阶段点击效率好、CPC不高，建议二次测试</li>
+                    <li><span class="gb gb-C">C</span> 低效：达到止损线仍无转化，或CPA明显超标</li>
+                    <li><span class="gb gb-Q">优</span> 优质标签：样本充分且CPA低于目标/项目中位，可作为复制素材</li>
+                    <li><span class="gb gb-BD">劣</span> 劣质标签：消耗充分但无转化或成本严重超标，建议关停</li>
                 </ul>
+                <p class="muted">目标CPA填0时，系统会自动使用项目内有效转化成本中位数作为动态目标。</p>
             </div>
             <div class="table-wrap"><table>
-            <thead><tr><th>规则名</th><th>S消耗%</th><th>S转化≥</th><th>A消耗%</th><th>A转化≥</th><th>潜力消耗上限</th><th>默认</th><th>操作</th></tr></thead>
+            <thead><tr><th>规则名</th><th>目标CPA</th><th>样本线</th><th>止损线</th><th>S转化≥</th><th>S CPA</th><th>A CPA</th><th>B CPA</th><th>潜力消耗≤</th><th>默认</th><th>操作</th></tr></thead>
             <tbody>${rules.map(r => `<tr>
-                <td>${r.name}</td><td>${r.s_cost_pct}</td><td>${r.s_conversion_min}</td>
-                <td>${r.a_cost_pct}</td><td>${r.a_conversion_min}</td><td>${r.potential_cost_max}</td>
+                <td>${r.name}</td>
+                <td>${Number(r.target_cpa || 0).toFixed(0)}</td>
+                <td>${Number(r.min_sample_cost || 0).toFixed(0)}</td>
+                <td>${Number(r.stop_loss_cost || 0).toFixed(0)}</td>
+                <td>${r.s_conversion_min}</td>
+                <td>≤${Number(r.s_cpa_ratio || 1).toFixed(1)}x</td>
+                <td>≤${Number(r.a_cpa_ratio || 1.2).toFixed(1)}x</td>
+                <td>≤${Number(r.b_cpa_ratio || 1.6).toFixed(1)}x</td>
+                <td>${Number(r.potential_cost_max || 0).toFixed(0)}</td>
                 <td>${r.is_default ? '✓' : ''}</td>
                 <td><button class="btn btn-sm" onclick="useRule(${r.id})">应用到当前项目</button></td>
             </tr>`).join('')}</tbody></table></div>
@@ -1122,7 +1130,7 @@ async function renderRules() {
 async function useRule(rid) {
     if (!S.pid) return alert('请先选择项目');
     try {
-        await api(`/api/grade-rules/${rid}/apply`, { method: 'POST', body: JSON.stringify({ project_id: S.pid }) });
+        await api(`/api/projects/${S.pid}/regrade`, { method: 'POST', body: JSON.stringify({ rule_id: rid }) });
         alert('规则已应用，分级已更新');
         S.overview = null;
         render();

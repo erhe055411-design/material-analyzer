@@ -99,20 +99,29 @@ def init_db():
 
         CREATE TABLE IF NOT EXISTS grade_rules (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL DEFAULT '默认规则',
-            s_cost_pct REAL DEFAULT 10.0,
+            name TEXT NOT NULL DEFAULT '专业投放分级规则',
+            target_cpa REAL DEFAULT 0,
+            min_sample_cost REAL DEFAULT 300,
+            stop_loss_cost REAL DEFAULT 800,
+            s_cost_pct REAL DEFAULT 30.0,
             s_conv_cost_max REAL DEFAULT 0,
             s_conversion_min REAL DEFAULT 3,
-            a_cost_pct REAL DEFAULT 30.0,
+            s_cpa_ratio REAL DEFAULT 1.0,
+            a_cost_pct REAL DEFAULT 50.0,
             a_conv_cost_max REAL DEFAULT 0,
             a_conversion_min REAL DEFAULT 1,
+            a_cpa_ratio REAL DEFAULT 1.2,
             b_has_conversion INTEGER DEFAULT 1,
             b_conv_cost_max REAL DEFAULT 0,
+            b_conversion_min REAL DEFAULT 1,
+            b_cpa_ratio REAL DEFAULT 1.6,
             c_max_cost REAL DEFAULT 50.0,
-            potential_cost_max REAL DEFAULT 500.0,
+            potential_cost_max REAL DEFAULT 300.0,
             potential_ctr_mult REAL DEFAULT 1.5,
+            potential_ctr_min REAL DEFAULT 0,
             potential_min_show REAL DEFAULT 1000,
             potential_min_click REAL DEFAULT 20,
+            potential_cpc_ratio REAL DEFAULT 1.2,
             is_default INTEGER DEFAULT 1,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
@@ -157,12 +166,23 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_material_tags_product ON material_tags(product);
     """)
 
-    # 插入默认分级规则（以消耗+转化数+转化成本为核心）
+    # 插入默认分级规则（投手决策导向：目标CPA、样本线、止损线、潜力信号）
     cur = conn.execute("SELECT COUNT(*) FROM grade_rules WHERE is_default=1")
     if cur.fetchone()[0] == 0:
         conn.execute("""
-            INSERT INTO grade_rules (name, s_cost_pct, s_conversion_min, a_cost_pct, a_conversion_min, b_has_conversion, b_conv_cost_max, c_max_cost, potential_cost_max, potential_ctr_mult, potential_min_show, potential_min_click, is_default)
-            VALUES ('默认规则', 10.0, 3, 30.0, 1, 1, 0, 50.0, 500.0, 1.5, 1000, 20, 1)
+            INSERT INTO grade_rules (
+                name, target_cpa, min_sample_cost, stop_loss_cost,
+                s_cost_pct, s_conversion_min, s_cpa_ratio,
+                a_cost_pct, a_conversion_min, a_cpa_ratio,
+                b_has_conversion, b_conversion_min, b_cpa_ratio,
+                potential_cost_max, potential_ctr_min, potential_min_click, potential_cpc_ratio, is_default
+            ) VALUES (
+                '专业投放分级规则', 0, 300, 800,
+                30.0, 3, 1.0,
+                50.0, 1, 1.2,
+                1, 1, 1.6,
+                300.0, 0, 20, 1.2, 1
+            )
         """)
 
     # 迁移：为已有表添加新列（逐列执行，避免某一列已存在导致后续迁移被跳过）
@@ -186,6 +206,15 @@ def init_db():
         "ALTER TABLE import_logs ADD COLUMN account_id TEXT DEFAULT ''",
         "ALTER TABLE import_logs ADD COLUMN date_start TEXT DEFAULT ''",
         "ALTER TABLE import_logs ADD COLUMN date_end TEXT DEFAULT ''",
+        "ALTER TABLE grade_rules ADD COLUMN target_cpa REAL DEFAULT 0",
+        "ALTER TABLE grade_rules ADD COLUMN min_sample_cost REAL DEFAULT 300",
+        "ALTER TABLE grade_rules ADD COLUMN stop_loss_cost REAL DEFAULT 800",
+        "ALTER TABLE grade_rules ADD COLUMN s_cpa_ratio REAL DEFAULT 1.0",
+        "ALTER TABLE grade_rules ADD COLUMN a_cpa_ratio REAL DEFAULT 1.2",
+        "ALTER TABLE grade_rules ADD COLUMN b_conversion_min REAL DEFAULT 1",
+        "ALTER TABLE grade_rules ADD COLUMN b_cpa_ratio REAL DEFAULT 1.6",
+        "ALTER TABLE grade_rules ADD COLUMN potential_ctr_min REAL DEFAULT 0",
+        "ALTER TABLE grade_rules ADD COLUMN potential_cpc_ratio REAL DEFAULT 1.2",
     ]
     for sql in migrations:
         try:
