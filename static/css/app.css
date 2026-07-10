@@ -1303,3 +1303,119 @@ textarea:focus {
     .overview-charts-grid { grid-template-columns: 1fr; }
     .chart-box.large { height: 300px; }
 }
+
+/* 素材诊断专业表格优化 */
+#gradeTabs .ftab {
+    gap: 6px;
+}
+
+.tab-count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 22px;
+    height: 18px;
+    padding: 0 6px;
+    border-radius: 999px;
+    background: rgba(15, 23, 42, 0.06);
+    color: #64748b;
+    font-size: 11px;
+    font-style: normal;
+    font-weight: 700;
+}
+
+.ftab.active .tab-count {
+    background: rgba(255,255,255,0.75);
+    color: #1d4ed8;
+}
+
+.materials-pro-table .name-col {
+    min-width: 320px;
+}
+
+.materials-pro-table .num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.materials-pro-table .num.strong {
+    font-weight: 800;
+    color: #0f172a;
+}
+
+.material-name-cell {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    max-width: 420px;
+}
+
+.material-name-text {
+    display: block;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #0f172a;
+    font-weight: 650;
+}
+
+.material-name-cell .copy-btn {
+    flex: 0 0 auto;
+    opacity: .62;
+}
+
+.material-name-cell:hover .copy-btn {
+    opacity: 1;
+}
+
+.action-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 76px;
+    padding: 5px 9px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 750;
+    white-space: nowrap;
+    border: 1px solid transparent;
+}
+
+.action-scale {
+    color: #047857;
+    background: #ecfdf5;
+    border-color: #bbf7d0;
+}
+
+.action-keep {
+    color: #1d4ed8;
+    background: #eff6ff;
+    border-color: #bfdbfe;
+}
+
+.action-test {
+    color: #7c3aed;
+    background: #f5f3ff;
+    border-color: #ddd6fe;
+}
+
+.action-opt {
+    color: #b45309;
+    background: #fffbeb;
+    border-color: #fde68a;
+}
+
+.action-stop {
+    color: #b91c1c;
+    background: #fef2f2;
+    border-color: #fecaca;
+}
+
+.action-watch {
+    color: #475569;
+    background: #f8fafc;
+    border-color: #e2e8f0;
+}

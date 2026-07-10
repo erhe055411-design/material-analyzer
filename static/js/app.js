@@ -81,19 +81,27 @@ function render() {
 }
 
 // ========== 工具函数 ==========
-function fmt(n) {
+function fmt(n, decimals = 0) {
     if (n == null || isNaN(n)) return '-';
     n = parseFloat(n);
-    if (n >= 10000) return (n / 10000).toFixed(1) + '万';
-    if (n >= 1000) return n.toFixed(0);
-    return n.toFixed(2);
+    if (Math.abs(n) >= 10000) return (n / 10000).toFixed(1).replace(/\.0$/, '') + '万';
+    return n.toFixed(decimals).replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1');
+}
+
+function fmtInt(n) {
+    return fmt(n, 0);
+}
+
+function fmtPct(n, decimals = 2) {
+    if (n == null || isNaN(n)) return '-';
+    return `${parseFloat(n).toFixed(decimals)}%`;
 }
 
 function fmtCost(n) {
     if (n == null || isNaN(n)) return '-';
     n = parseFloat(n);
-    if (n >= 10000) return (n / 10000).toFixed(2) + '万';
-    return n.toFixed(0);
+    if (Math.abs(n) >= 10000) return '¥' + (n / 10000).toFixed(2).replace(/0+$/, '').replace(/\.$/, '') + '万';
+    return '¥' + n.toFixed(2);
 }
 
 function reviewStatusBadge(status) {
@@ -106,11 +114,41 @@ function reviewStatusBadge(status) {
 }
 
 function gradeBadge(g, potential, qg, pg) {
-    let html = `<span class="gb gb-${g}">${g}</span>`;
+    let html = `<span class="gb gb-${g}">${g || '-'}</span>`;
     if (potential) html += '<span class="gb gb-P" title="潜力素材">P</span>';
     if (qg) html += '<span class="gb gb-Q" title="优质素材">优</span>';
     if (pg) html += '<span class="gb gb-BD" title="劣质素材">劣</span>';
     return html;
+}
+
+function materialActionBadge(m) {
+    const grade = m.grade || 'C';
+    const conversions = Number(m.conversion || 0);
+    const cost = Number(m.cost || 0);
+    if (m.is_poor_grade || (grade === 'C' && cost > 0 && conversions === 0)) {
+        return '<span class="action-badge action-stop">降预算/暂停</span>';
+    }
+    if (m.is_quality_grade || grade === 'S') {
+        return '<span class="action-badge action-scale">复制放量</span>';
+    }
+    if (grade === 'A') {
+        return '<span class="action-badge action-keep">稳定观察</span>';
+    }
+    if (m.is_potential || grade === 'P') {
+        return '<span class="action-badge action-test">小预算测试</span>';
+    }
+    if (grade === 'B') {
+        return '<span class="action-badge action-opt">优化素材</span>';
+    }
+    return '<span class="action-badge action-watch">继续观察</span>';
+}
+
+function materialNameCell(name) {
+    const safe = escapeHtml(name || '-');
+    return `<div class="material-name-cell" title="${safe}">
+        <span class="material-name-text">${safe}</span>
+        ${copyButtonHtml(name)}
+    </div>`;
 }
 
 // ========== 项目管理 ==========
@@ -504,14 +542,14 @@ async function renderAnalysis() {
     el.innerHTML = `
     <div class="filter-bar">
         <div class="filter-tabs" id="gradeTabs">
-            <button class="ftab ${!st.grade ? 'active' : ''}" data-v="">全部</button>
-            <button class="ftab ${st.grade==='S' ? 'active' : ''}" data-v="S"><span class="gb gb-S">S</span>核心</button>
-            <button class="ftab ${st.grade==='A' ? 'active' : ''}" data-v="A"><span class="gb gb-A">A</span>稳定</button>
-            <button class="ftab ${st.grade==='B' ? 'active' : ''}" data-v="B"><span class="gb gb-B">B</span>待提</button>
-            <button class="ftab ${st.grade==='C' ? 'active' : ''}" data-v="C"><span class="gb gb-C">C</span>低效</button>
-            <button class="ftab ${st.grade==='potential' ? 'active' : ''}" data-v="potential"><span class="gb gb-P">P</span>潜力</button>
-            <button class="ftab ${st.grade==='quality' ? 'active' : ''}" data-v="quality"><span class="gb gb-Q">优</span>优质</button>
-            <button class="ftab ${st.grade==='poor' ? 'active' : ''}" data-v="poor"><span class="gb gb-BD">劣</span>劣质</button>
+            <button class="ftab ${!st.grade ? 'active' : ''}" data-v="">全部 <em class="tab-count" data-count="all">-</em></button>
+            <button class="ftab ${st.grade==='S' ? 'active' : ''}" data-v="S"><span class="gb gb-S">S</span>核心 <em class="tab-count" data-count="S">-</em></button>
+            <button class="ftab ${st.grade==='A' ? 'active' : ''}" data-v="A"><span class="gb gb-A">A</span>稳定 <em class="tab-count" data-count="A">-</em></button>
+            <button class="ftab ${st.grade==='B' ? 'active' : ''}" data-v="B"><span class="gb gb-B">B</span>待提 <em class="tab-count" data-count="B">-</em></button>
+            <button class="ftab ${st.grade==='C' ? 'active' : ''}" data-v="C"><span class="gb gb-C">C</span>低效 <em class="tab-count" data-count="C">-</em></button>
+            <button class="ftab ${st.grade==='potential' ? 'active' : ''}" data-v="potential"><span class="gb gb-P">P</span>潜力 <em class="tab-count" data-count="potential">-</em></button>
+            <button class="ftab ${st.grade==='quality' ? 'active' : ''}" data-v="quality"><span class="gb gb-Q">优</span>优质 <em class="tab-count" data-count="quality">-</em></button>
+            <button class="ftab ${st.grade==='poor' ? 'active' : ''}" data-v="poor"><span class="gb gb-BD">劣</span>劣质 <em class="tab-count" data-count="poor">-</em></button>
         </div>
         <div class="filter-row">
             <select id="fAccount" onchange="filterChange('account_id',this.value)"></select>
@@ -614,6 +652,8 @@ async function loadMaterials(page) {
         const tbl = document.getElementById('materialsTable');
         if (!tbl) return;
 
+        updateGradeTabCounts(data.grade_counts || {});
+
         if (!data.items || data.items.length === 0) {
             tbl.innerHTML = '<div class="empty"><p>当前筛选条件下没有素材</p></div>';
             renderPagination(0, st.page);
@@ -630,24 +670,22 @@ async function loadMaterials(page) {
             </div>
         </div>` : '';
 
-        tbl.innerHTML = aiBarHtml + `<table><thead><tr>
+        tbl.innerHTML = aiBarHtml + `<table class="materials-pro-table"><thead><tr>
             <th style="width:30px"><input type="checkbox" id="selectAllHeader" onclick="toggleSelectAll(this)"></th>
-            <th>分级</th><th>素材名称</th><th>审核状态</th><th>消耗</th><th>展示</th><th>点击</th>
-            <th>点击率</th><th>转化数</th><th>转化成本</th><th>状态</th>
+            <th>分级</th><th class="name-col">素材名称</th><th>审核状态</th><th>消耗</th><th>展示</th><th>点击</th>
+            <th>CTR</th><th>转化</th><th>转化成本</th><th>建议动作</th><th>状态</th>
         </tr></thead><tbody>${data.items.map(m => `<tr>
             <td><input type="checkbox" class="ai-check" data-id="${m.id}" onchange="updateSelectCount()"></td>
             <td>${gradeBadge(m.grade || '-', m.is_potential, m.is_quality_grade, m.is_poor_grade)}</td>
-            <td class="td-name" title="${escapeHtml(m.material_name || '')}">
-                ${copyButtonHtml(m.material_name || '')}
-                ${escapeHtml(m.material_name || '-')}
-            </td>
+            <td class="td-name">${materialNameCell(m.material_name || '-')}</td>
             <td>${reviewStatusBadge(m.review_status)}</td>
-            <td>${fmtCost(m.cost)}</td>
-            <td>${fmt(m.show)}</td>
-            <td>${fmt(m.click)}</td>
-            <td>${m.ctr}%</td>
-            <td>${fmt(m.conversion)}</td>
-            <td>${fmt(m.conversion_cost)}</td>
+            <td class="num">${fmtCost(m.cost)}</td>
+            <td class="num">${fmtInt(m.show)}</td>
+            <td class="num">${fmtInt(m.click)}</td>
+            <td class="num">${fmtPct(m.ctr)}</td>
+            <td class="num strong">${fmtInt(m.conversion)}</td>
+            <td class="num">${fmtCost(m.conversion_cost)}</td>
+            <td>${materialActionBadge(m)}</td>
             <td>${m.status || '-'}</td>
         </tr>`).join('')}</tbody></table>`;
 
@@ -656,6 +694,14 @@ async function loadMaterials(page) {
         const tbl = document.getElementById('materialsTable');
         if (tbl) tbl.innerHTML = `<div class="error-box">加载失败: ${e.message}</div>`;
     }
+}
+
+function updateGradeTabCounts(counts) {
+    document.querySelectorAll('#gradeTabs .tab-count').forEach(el => {
+        const key = el.dataset.count;
+        const val = counts && counts[key] != null ? counts[key] : 0;
+        el.textContent = fmtInt(val);
+    });
 }
 
 function renderPagination(total, page) {

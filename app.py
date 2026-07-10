@@ -940,13 +940,41 @@ def list_materials(pid):
     start = (page - 1) * size
     end = start + size
     materials = [dict(r) for r in all_rows[start:end]]
+
+    counts_row = conn.execute("""
+        SELECT
+            COUNT(*) AS all_count,
+            SUM(CASE WHEN m.grade='S' THEN 1 ELSE 0 END) AS s_count,
+            SUM(CASE WHEN m.grade='A' THEN 1 ELSE 0 END) AS a_count,
+            SUM(CASE WHEN m.grade='B' THEN 1 ELSE 0 END) AS b_count,
+            SUM(CASE WHEN m.grade='C' THEN 1 ELSE 0 END) AS c_count,
+            SUM(CASE WHEN m.grade='P' THEN 1 ELSE 0 END) AS p_count,
+            SUM(CASE WHEN m.is_potential=1 THEN 1 ELSE 0 END) AS potential_count,
+            SUM(CASE WHEN m.is_quality_grade=1 THEN 1 ELSE 0 END) AS quality_count,
+            SUM(CASE WHEN m.is_poor_grade=1 THEN 1 ELSE 0 END) AS poor_count
+        FROM materials m
+        JOIN accounts a ON m.account_id = a.id
+        WHERE a.project_id=?
+    """, (pid,)).fetchone()
+    grade_counts = {
+        'all': counts_row['all_count'] or 0,
+        'S': counts_row['s_count'] or 0,
+        'A': counts_row['a_count'] or 0,
+        'B': counts_row['b_count'] or 0,
+        'C': counts_row['c_count'] or 0,
+        'P': counts_row['p_count'] or 0,
+        'potential': counts_row['potential_count'] or 0,
+        'quality': counts_row['quality_count'] or 0,
+        'poor': counts_row['poor_count'] or 0,
+    }
     conn.close()
 
     return jsonify({
         'total': total,
         'page': page,
         'size': size,
-        'items': materials
+        'items': materials,
+        'grade_counts': grade_counts
     })
 
 
