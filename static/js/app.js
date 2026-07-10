@@ -66,6 +66,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (e.key === 'Escape') closeGlobalAIAssistant();
     });
     document.getElementById('aiAssistantFAB')?.addEventListener('click', openGlobalAIAssistant);
+    document.getElementById('aiAssistantFAB')?.classList.remove('hidden');
     // 加载项目列表
     await loadProjects();
     render();
@@ -1613,9 +1614,11 @@ const AI_PAGE_SUGGESTIONS = {
 
 function openGlobalAIAssistant() {
     const overlay = document.getElementById('aiAssistantOverlay');
+    const fab = document.getElementById('aiAssistantFAB');
     if (overlay) {
         overlay.classList.remove('hidden');
     }
+    fab?.classList.add('hidden');
     updateAIAssistantContext();
     // 加载历史聊天记录
     renderAIChatHistory();
@@ -1624,9 +1627,11 @@ function openGlobalAIAssistant() {
 
 function closeGlobalAIAssistant() {
     const overlay = document.getElementById('aiAssistantOverlay');
+    const fab = document.getElementById('aiAssistantFAB');
     if (overlay) {
         overlay.classList.add('hidden');
     }
+    fab?.classList.remove('hidden');
 }
 
 function updateAIAssistantContext() {
