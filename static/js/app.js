@@ -65,6 +65,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') closeGlobalAIAssistant();
     });
+    document.getElementById('aiAssistantFAB')?.addEventListener('click', openGlobalAIAssistant);
     // 加载项目列表
     await loadProjects();
     render();
@@ -1907,3 +1908,8 @@ function appendGlobalAIMessage(role, content, isHtml = false) {
     messagesEl.scrollTop = messagesEl.scrollHeight;
     return id;
 }
+
+// Expose AI assistant handlers for inline HTML callbacks and compatibility.
+window.openGlobalAIAssistant = openGlobalAIAssistant;
+window.closeGlobalAIAssistant = closeGlobalAIAssistant;
+window.sendGlobalAIQuestion = sendGlobalAIQuestion;
