@@ -1026,19 +1026,21 @@ body {
 }
 
 .nav-icon {
-    width: 24px;
-    height: 24px;
-    border-radius: 8px;
+    width: 26px;
+    height: 26px;
+    border-radius: 9px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    font-size: 15px;
-    background: rgba(120, 120, 128, 0.10);
+    font-size: 16px;
+    background: rgba(255, 255, 255, 0.72);
+    box-shadow: inset 0 0 0 1px rgba(60, 60, 67, 0.08), 0 1px 2px rgba(0, 0, 0, 0.04);
 }
 
 .nav-item.active .nav-icon {
-    background: var(--ios-blue);
-    color: #fff;
+    background: rgba(255, 255, 255, 0.92);
+    color: inherit;
+    transform: scale(1.03);
 }
 
 .sidebar-footer { border-top: 1px solid var(--ios-border); }
