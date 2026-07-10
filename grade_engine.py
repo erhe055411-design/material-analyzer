@@ -209,10 +209,10 @@ def apply_grades_to_db(project_id=None, rules=None):
     """对数据库中的素材应用分级"""
     conn = get_db()
 
-    sql = "SELECT * FROM materials"
+    sql = "SELECT m.* FROM materials m"
     params = []
     if project_id:
-        sql += " WHERE project_id=?"
+        sql += " JOIN accounts a ON m.account_id = a.id WHERE a.project_id=?"
         params.append(project_id)
 
     cur = conn.execute(sql, params)
@@ -231,7 +231,7 @@ def apply_grades_to_db(project_id=None, rules=None):
             final_grade = '优'
 
         conn.execute(
-            "UPDATE materials SET grade=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+            "UPDATE materials SET grade=? WHERE id=?",
             (final_grade, material['id'])
         )
         updated += 1
@@ -253,11 +253,11 @@ def get_grade_summary(project_id=None):
             SUM(conversion) as total_conversion,
             AVG(CASE WHEN conversion > 0 THEN conversion_cost ELSE NULL END) as avg_conv_cost,
             AVG(ctr) as avg_ctr
-        FROM materials
+        FROM materials m
     """
     params = []
     if project_id:
-        sql += " WHERE project_id=?"
+        sql += " JOIN accounts a ON m.account_id = a.id WHERE a.project_id=?"
         params.append(project_id)
 
     sql += " GROUP BY grade ORDER BY CASE grade WHEN '优' THEN 0 WHEN 'S' THEN 1 WHEN 'A' THEN 2 WHEN 'B' THEN 3 WHEN 'P' THEN 4 WHEN 'C' THEN 5 WHEN '劣' THEN 6 ELSE 7 END"
