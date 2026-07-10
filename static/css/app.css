@@ -1266,3 +1266,40 @@ textarea:focus {
 .kpi-sub { margin-top: 7px; color: #64748B; font-size: 12px; line-height: 1.45; }
 @media (max-width: 1200px) { .kpi-row.pro { grid-template-columns: repeat(3, 1fr); } }
 @media (max-width: 760px) { .kpi-row.pro { grid-template-columns: 1fr; } .exec-insight-card { padding: 18px; } }
+
+/* ========== 经营概览图表区精简美化 ========== */
+.overview-charts-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 18px;
+    margin: 18px 0;
+}
+.overview-chart-card {
+    min-height: 390px;
+    padding: 20px 20px 16px;
+    border-radius: 24px;
+    background: linear-gradient(180deg, rgba(255,255,255,.98), rgba(248,250,252,.92));
+    border: 1px solid rgba(226,232,240,.9);
+    box-shadow: 0 14px 34px rgba(15,23,42,.06);
+}
+.overview-chart-card .card-title {
+    font-size: 17px;
+    font-weight: 800;
+    color: #111827;
+    margin-bottom: 4px;
+}
+.card-subtitle {
+    color: #64748B;
+    font-size: 12px;
+    margin-bottom: 12px;
+}
+.chart-box.large { height: 320px; }
+.overview-chart-card:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 18px 42px rgba(15,23,42,.09);
+    transition: all .18s ease;
+}
+@media (max-width: 1000px) {
+    .overview-charts-grid { grid-template-columns: 1fr; }
+    .chart-box.large { height: 300px; }
+}

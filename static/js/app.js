@@ -350,10 +350,9 @@ async function renderDashboard() {
 
         <!-- 图表区 -->
         ${data.grade_distribution && data.grade_distribution.length > 0 ? `
-        <div class="chart-row">
-            <div class="card chart-card"><div class="card-title">分级分布</div><div id="gradeChart" class="chart-box"></div></div>
-            <div class="card chart-card"><div class="card-title">效率漏斗</div><div id="funnelChart" class="chart-box"></div></div>
-            <div class="card chart-card"><div class="card-title">成本区间分布</div><div id="costTierChart" class="chart-box"></div></div>
+        <div class="overview-charts-grid">
+            <div class="card chart-card overview-chart-card"><div class="card-title">分级分布</div><div class="card-subtitle">看 S/A/B/C 素材结构与消耗承接</div><div id="gradeChart" class="chart-box large"></div></div>
+            <div class="card chart-card overview-chart-card"><div class="card-title">成本区间分布</div><div class="card-subtitle">看素材消耗集中在哪些测试/止损区间</div><div id="costTierChart" class="chart-box large"></div></div>
         </div>
         ` : ''}
 
@@ -442,57 +441,20 @@ function renderCharts(data) {
         const map = {};
         (data.grade_distribution || []).forEach(d => map[d.grade] = d);
         chart.setOption({
-            tooltip: { trigger: 'axis' },
-            grid: { left: 50, right: 50, top: 30, bottom: 30 },
-            xAxis: { type: 'category', data: grades },
-            yAxis: [{ type: 'value', name: '素材数' }, { type: 'value', name: '消耗' }],
-            series: [
-                { name: '素材数', type: 'bar', data: grades.map(g => map[g]?.count || 0), itemStyle: { color: p => colors[grades[p.dataIndex]] } },
-                { name: '消耗', type: 'line', yAxisIndex: 1, data: grades.map(g => parseFloat((map[g]?.cost || 0).toFixed(2))), lineStyle: { color: '#4F6EF7' }, itemStyle: { color: '#4F6EF7' } }
-            ]
-        });
-        chart.on('click', (p) => viewClass('grade', grades[p.dataIndex]));
-        window.addEventListener('resize', () => chart.resize());
-    }
-    // 效率漏斗：展示→点击→转化，替代无效的投放目的空图
-    const fEl = document.getElementById('funnelChart');
-    if (fEl) {
-        const chart = echarts.init(fEl);
-        const s = data.stats || {};
-        const d = data.diagnosis || {};
-        const show = Number(s.total_show || 0);
-        const click = Number(s.total_click || 0);
-        const conv = Number(s.total_conversion || 0);
-        chart.setOption({
-            tooltip: {
-                trigger: 'item',
-                formatter: (p) => `${p.name}: ${fmt(p.value)}<br/>占上层: ${p.data.rate || '-'}`
-            },
+            tooltip: { trigger: 'item', formatter: '{b}<br/>素材数：{c}<br/>占比：{d}%' },
+            legend: { bottom: 0, icon: 'circle', itemGap: 18, textStyle: { color: '#64748B' } },
             series: [{
-                type: 'funnel',
-                left: '8%', top: 18, bottom: 10, width: '58%',
-                min: 0,
-                max: Math.max(show, click, conv, 1),
-                sort: 'none',
-                gap: 4,
-                label: { show: true, position: 'inside', formatter: '{b}' },
-                itemStyle: { borderColor: '#fff', borderWidth: 2, borderRadius: 8 },
-                data: [
-                    { name: '展示', value: show, rate: '100%', itemStyle: { color: '#007AFF' } },
-                    { name: '点击', value: click, rate: `${fmt(d.ctr || s.avg_ctr || 0)}% CTR`, itemStyle: { color: '#5856D6' } },
-                    { name: '转化', value: conv, rate: `${fmt(d.cvr || 0)}% CVR`, itemStyle: { color: '#34C759' } }
-                ]
-            }],
-            graphic: [{
-                type: 'group', right: 18, top: 36,
-                children: [
-                    { type: 'text', style: { text: `CTR ${fmt(d.ctr || s.avg_ctr || 0)}%`, fill: '#111827', font: '700 16px sans-serif' } },
-                    { type: 'text', top: 34, style: { text: `CVR ${fmt(d.cvr || 0)}%`, fill: '#111827', font: '700 16px sans-serif' } },
-                    { type: 'text', top: 68, style: { text: `CPA ${fmtCost(s.avg_conv_cost || 0)}`, fill: '#111827', font: '700 16px sans-serif' } },
-                    { type: 'text', top: 106, style: { text: d.cpa_health || '查看流量到转化效率', fill: '#64748B', font: '12px sans-serif', width: 150, overflow: 'break' } }
-                ]
+                name: '分级分布',
+                type: 'pie',
+                radius: ['48%', '72%'],
+                center: ['50%', '44%'],
+                avoidLabelOverlap: true,
+                itemStyle: { borderColor: '#fff', borderWidth: 4, borderRadius: 8 },
+                label: { formatter: '{b}\n{c}条', color: '#334155', fontWeight: 700 },
+                data: grades.map(g => ({ name: g, value: map[g]?.count || 0, itemStyle: { color: colors[g] } }))
             }]
         });
+        chart.on('click', (p) => viewClass('grade', p.name));
         window.addEventListener('resize', () => chart.resize());
     }
     // 成本区间分布图
@@ -501,16 +463,18 @@ function renderCharts(data) {
         const chart = echarts.init(cEl);
         const tierColors = ['#52C41A', '#95DE64', '#FAAD14', '#FF7875', '#FF4D4F', '#8C8C8C'];
         chart.setOption({
-            tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
-            grid: { left: 50, right: 20, top: 30, bottom: 30 },
-            xAxis: { type: 'category', data: data.cost_tier_distribution.map(d => d.tier) },
-            yAxis: { type: 'value', name: '素材数' },
+            tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, formatter: (ps) => `${ps[0].axisValue}<br/>素材数：${fmt(ps[0].value)}条` },
+            grid: { left: 42, right: 18, top: 22, bottom: 42 },
+            xAxis: { type: 'category', data: data.cost_tier_distribution.map(d => d.tier), axisTick: { show: false }, axisLine: { lineStyle: { color: '#E5E7EB' } }, axisLabel: { color: '#64748B' } },
+            yAxis: { type: 'value', name: '素材数', splitLine: { lineStyle: { color: '#EEF2F7' } }, axisLabel: { color: '#64748B' } },
             series: [{
                 type: 'bar',
+                barWidth: 34,
                 data: data.cost_tier_distribution.map((d, i) => ({
                     value: d.count,
-                    itemStyle: { color: tierColors[i % tierColors.length] }
-                }))
+                    itemStyle: { color: tierColors[i % tierColors.length], borderRadius: [10, 10, 4, 4] }
+                })),
+                label: { show: true, position: 'top', color: '#334155', fontWeight: 700 }
             }]
         });
         window.addEventListener('resize', () => chart.resize());
