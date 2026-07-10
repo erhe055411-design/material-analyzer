@@ -680,7 +680,7 @@ def project_overview(pid):
             COALESCE(SUM(m.show), 0) as total_show,
             COALESCE(SUM(m.click), 0) as total_click,
             COALESCE(SUM(m.conversion), 0) as total_conversion,
-            CASE WHEN SUM(m.click) > 0 THEN ROUND(SUM(m.click)*1.0/SUM(m.show)*100, 2) ELSE 0 END as avg_ctr,
+            CASE WHEN SUM(m.show) > 0 THEN ROUND(SUM(m.click)*1.0/SUM(m.show)*100, 2) ELSE 0 END as avg_ctr,
             CASE WHEN SUM(m.conversion) > 0 THEN ROUND(SUM(m.cost)*1.0/SUM(m.conversion), 2) ELSE 0 END as avg_conv_cost
         FROM accounts a
         LEFT JOIN materials m ON m.account_id = a.id
@@ -1188,7 +1188,7 @@ def account_analysis(pid, aid):
                COALESCE(SUM(m.show), 0) as total_show,
                COALESCE(SUM(m.click), 0) as total_click,
                COALESCE(SUM(m.conversion), 0) as total_conversion,
-               CASE WHEN SUM(m.click) > 0 THEN ROUND(SUM(m.click)*1.0/SUM(m.show)*100, 2) ELSE 0 END as avg_ctr,
+               CASE WHEN SUM(m.show) > 0 THEN ROUND(SUM(m.click)*1.0/SUM(m.show)*100, 2) ELSE 0 END as avg_ctr,
                CASE WHEN SUM(m.conversion) > 0 THEN ROUND(SUM(m.cost)*1.0/SUM(m.conversion), 2) ELSE 0 END as avg_conv_cost
         FROM accounts a
         LEFT JOIN materials m ON m.account_id = a.id
@@ -1236,7 +1236,7 @@ def purpose_analysis(pid):
                COALESCE(SUM(m.show), 0) as total_show,
                COALESCE(SUM(m.click), 0) as total_click,
                COALESCE(SUM(m.conversion), 0) as total_conversion,
-               CASE WHEN SUM(m.click) > 0 THEN ROUND(SUM(m.click)*1.0/SUM(m.show)*100, 2) ELSE 0 END as avg_ctr,
+               CASE WHEN SUM(m.show) > 0 THEN ROUND(SUM(m.click)*1.0/SUM(m.show)*100, 2) ELSE 0 END as avg_ctr,
                CASE WHEN SUM(m.conversion) > 0 THEN ROUND(SUM(m.cost)*1.0/SUM(m.conversion), 2) ELSE 0 END as avg_conv_cost
         FROM accounts a
         LEFT JOIN materials m ON m.account_id = a.id
@@ -1260,7 +1260,7 @@ def grade_analysis(pid):
                COALESCE(SUM(m.show), 0) as total_show,
                COALESCE(SUM(m.click), 0) as total_click,
                COALESCE(SUM(m.conversion), 0) as total_conversion,
-               CASE WHEN SUM(m.click) > 0 THEN ROUND(SUM(m.click)*1.0/SUM(m.show)*100, 2) ELSE 0 END as avg_ctr,
+               CASE WHEN SUM(m.show) > 0 THEN ROUND(SUM(m.click)*1.0/SUM(m.show)*100, 2) ELSE 0 END as avg_ctr,
                CASE WHEN SUM(m.conversion) > 0 THEN ROUND(SUM(m.cost)*1.0/SUM(m.conversion), 2) ELSE 0 END as avg_conv_cost
         FROM materials m
         JOIN accounts a ON m.account_id = a.id
@@ -1443,7 +1443,7 @@ def tag_analysis(pid):
                COALESCE(SUM(m.cost), 0) as total_cost,
                COALESCE(SUM(m.conversion), 0) as total_conversion,
                CASE WHEN SUM(m.conversion) > 0 THEN ROUND(SUM(m.cost)*1.0/SUM(m.conversion), 2) ELSE 0 END as avg_conv_cost,
-               CASE WHEN SUM(m.click) > 0 THEN ROUND(SUM(m.click)*1.0/SUM(m.show)*100, 2) ELSE 0 END as avg_ctr,
+               CASE WHEN SUM(m.show) > 0 THEN ROUND(SUM(m.click)*1.0/SUM(m.show)*100, 2) ELSE 0 END as avg_ctr,
                SUM(CASE WHEN m.grade='S' THEN 1 ELSE 0 END) as s_count,
                SUM(CASE WHEN m.grade='A' THEN 1 ELSE 0 END) as a_count,
                SUM(CASE WHEN m.grade='B' THEN 1 ELSE 0 END) as b_count,
@@ -1877,7 +1877,7 @@ def ai_chat_general(pid):
                     COUNT(m.id) as material_count,
                     COALESCE(SUM(m.cost), 0) as total_cost,
                     COALESCE(SUM(m.conversion), 0) as total_conversion,
-                    CASE WHEN SUM(m.click) > 0 THEN ROUND(SUM(m.click)*1.0/SUM(m.show)*100, 2) ELSE 0 END as avg_ctr,
+                    CASE WHEN SUM(m.show) > 0 THEN ROUND(SUM(m.click)*1.0/SUM(m.show)*100, 2) ELSE 0 END as avg_ctr,
                     CASE WHEN SUM(m.conversion) > 0 THEN ROUND(SUM(m.cost)*1.0/SUM(m.conversion), 2) ELSE 0 END as avg_conv_cost
                 FROM accounts a
                 LEFT JOIN materials m ON m.account_id = a.id

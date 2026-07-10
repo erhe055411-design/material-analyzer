@@ -352,7 +352,7 @@ async function renderDashboard() {
         ${data.grade_distribution && data.grade_distribution.length > 0 ? `
         <div class="chart-row">
             <div class="card chart-card"><div class="card-title">分级分布</div><div id="gradeChart" class="chart-box"></div></div>
-            <div class="card chart-card"><div class="card-title">投放目的</div><div id="purposeChart" class="chart-box"></div></div>
+            <div class="card chart-card"><div class="card-title">效率漏斗</div><div id="funnelChart" class="chart-box"></div></div>
             <div class="card chart-card"><div class="card-title">成本区间分布</div><div id="costTierChart" class="chart-box"></div></div>
         </div>
         ` : ''}
@@ -454,19 +454,45 @@ function renderCharts(data) {
         chart.on('click', (p) => viewClass('grade', grades[p.dataIndex]));
         window.addEventListener('resize', () => chart.resize());
     }
-    // 投放目的图
-    const pEl = document.getElementById('purposeChart');
-    if (pEl && data.purpose_distribution) {
-        const chart = echarts.init(pEl);
+    // 效率漏斗：展示→点击→转化，替代无效的投放目的空图
+    const fEl = document.getElementById('funnelChart');
+    if (fEl) {
+        const chart = echarts.init(fEl);
+        const s = data.stats || {};
+        const d = data.diagnosis || {};
+        const show = Number(s.total_show || 0);
+        const click = Number(s.total_click || 0);
+        const conv = Number(s.total_conversion || 0);
         chart.setOption({
-            tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
-            legend: { orient: 'vertical', right: 10, top: 'center' },
-            series: [{ type: 'pie', radius: ['40%', '70%'], center: ['40%', '50%'],
-                data: data.purpose_distribution.map(d => ({ name: d.campaign_purpose || '未分类', value: parseFloat((d.total_cost || 0).toFixed(2)) })),
-                label: { formatter: '{b}\n{d}%' }
+            tooltip: {
+                trigger: 'item',
+                formatter: (p) => `${p.name}: ${fmt(p.value)}<br/>占上层: ${p.data.rate || '-'}`
+            },
+            series: [{
+                type: 'funnel',
+                left: '8%', top: 18, bottom: 10, width: '58%',
+                min: 0,
+                max: Math.max(show, click, conv, 1),
+                sort: 'none',
+                gap: 4,
+                label: { show: true, position: 'inside', formatter: '{b}' },
+                itemStyle: { borderColor: '#fff', borderWidth: 2, borderRadius: 8 },
+                data: [
+                    { name: '展示', value: show, rate: '100%', itemStyle: { color: '#007AFF' } },
+                    { name: '点击', value: click, rate: `${fmt(d.ctr || s.avg_ctr || 0)}% CTR`, itemStyle: { color: '#5856D6' } },
+                    { name: '转化', value: conv, rate: `${fmt(d.cvr || 0)}% CVR`, itemStyle: { color: '#34C759' } }
+                ]
+            }],
+            graphic: [{
+                type: 'group', right: 18, top: 36,
+                children: [
+                    { type: 'text', style: { text: `CTR ${fmt(d.ctr || s.avg_ctr || 0)}%`, fill: '#111827', font: '700 16px sans-serif' } },
+                    { type: 'text', top: 34, style: { text: `CVR ${fmt(d.cvr || 0)}%`, fill: '#111827', font: '700 16px sans-serif' } },
+                    { type: 'text', top: 68, style: { text: `CPA ${fmtCost(s.avg_conv_cost || 0)}`, fill: '#111827', font: '700 16px sans-serif' } },
+                    { type: 'text', top: 106, style: { text: d.cpa_health || '查看流量到转化效率', fill: '#64748B', font: '12px sans-serif', width: 150, overflow: 'break' } }
+                ]
             }]
         });
-        chart.on('click', (p) => viewClass('purpose', p.name));
         window.addEventListener('resize', () => chart.resize());
     }
     // 成本区间分布图
