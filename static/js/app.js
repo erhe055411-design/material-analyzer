@@ -330,15 +330,7 @@ async function renderDashboard() {
         const s = data.stats;
 
         el.innerHTML = `
-        <!-- 核心指标 -->
-        <div class="kpi-row">
-            <div class="kpi"><div class="kpi-label">总消耗</div><div class="kpi-val">${fmtCost(s.total_cost)}</div></div>
-            <div class="kpi"><div class="kpi-label">总转化</div><div class="kpi-val">${fmt(s.total_conversion)}</div></div>
-            <div class="kpi"><div class="kpi-label">平均转化成本</div><div class="kpi-val">${fmt(s.avg_conv_cost)}</div></div>
-            <div class="kpi"><div class="kpi-label">素材数</div><div class="kpi-val">${s.material_count}</div></div>
-            <div class="kpi"><div class="kpi-label">账户数</div><div class="kpi-val">${s.account_count}</div></div>
-            <div class="kpi"><div class="kpi-label">均点击率</div><div class="kpi-val">${s.avg_ctr}%</div></div>
-        </div>
+        ${renderExecutiveDashboard(data)}
 
         <!-- 素材分类卡片 -->
         <div class="section-title">素材分级分布 <span class="section-hint">点击卡片查看对应素材</span></div>
@@ -377,6 +369,40 @@ async function renderDashboard() {
     } catch (e) {
         el.innerHTML = `<div class="error-box">加载失败: ${e.message}</div>`;
     }
+}
+
+function renderExecutiveDashboard(data) {
+    const s = data.stats || {};
+    const d = data.diagnosis || {};
+    const level = d.cpa_level || 'neutral';
+    const actions = d.actions || [];
+    return `
+        <div class="exec-dashboard">
+            <div class="exec-insight-card ${level}">
+                <div class="section-eyebrow">投手经营判断</div>
+                <h2>经营概览</h2>
+                <p>${escapeHtml(d.headline || '当前项目数据已更新，请结合分级分布与素材诊断继续分析。')}</p>
+                <div class="exec-actions">
+                    ${actions.map(a => `<span>✓ ${escapeHtml(a)}</span>`).join('') || '<span>✓ 优先关注高耗低转化与可复制素材</span>'}
+                </div>
+            </div>
+            <div class="kpi-row pro">
+                ${renderKpiCard('总消耗', fmtCost(s.total_cost), '30天累计投放体量', 'spend')}
+                ${renderKpiCard('总点击', fmt(s.total_click), `CTR ${fmt(d.ctr || s.avg_ctr || 0)}%`, 'click')}
+                ${renderKpiCard('总转化', fmt(s.total_conversion), `CVR ${fmt(d.cvr || 0)}%`, 'conv')}
+                ${renderKpiCard('转化成本', fmtCost(s.avg_conv_cost), escapeHtml(d.cpa_health || '等待转化成本判断'), `cpa ${level}`)}
+                ${renderKpiCard('有效素材率', `${fmt(d.effective_rate || 0)}%`, `${fmt(d.effective_count || 0)}条可继续投/测`, 'effective')}
+                ${renderKpiCard('止损素材', `${fmt(d.stop_loss_count || 0)}条`, `相关消耗 ${fmtCost(d.stop_loss_cost || 0)}`, 'risk')}
+            </div>
+        </div>`;
+}
+
+function renderKpiCard(label, value, sub, type) {
+    return `<div class="kpi pro ${type}">
+        <div class="kpi-label">${label}</div>
+        <div class="kpi-val">${value}</div>
+        <div class="kpi-sub">${sub}</div>
+    </div>`;
 }
 
 function renderClassCard(grade, title, color, dist, hint) {

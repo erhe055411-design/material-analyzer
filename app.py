@@ -799,10 +799,68 @@ def project_overview(pid):
     """, (pid,))
     poor_stats = dict(cur.fetchone())
 
+    # 投手驾驶舱诊断指标
+    total_materials = _safe_float(stats.get('material_count'))
+    total_click = _safe_float(stats.get('total_click'))
+    total_conversion = _safe_float(stats.get('total_conversion'))
+    avg_cpa = _safe_float(stats.get('avg_conv_cost'))
+    ctr = _safe_float(stats.get('avg_ctr'))
+    cvr = round(total_conversion / total_click * 100, 2) if total_click > 0 else 0
+    active_count = sum(int(g.get('count') or 0) for g in grade_dist if str(g.get('grade') or '').upper() in ('S', 'A', 'P'))
+    quality_count = int(_safe_float(quality_stats.get('count')))
+    potential_count = int(_safe_float(potential_stats.get('count')))
+    poor_count = int(_safe_float(poor_stats.get('count')))
+    effective_count = max(active_count, quality_count + potential_count)
+    effective_rate = round(effective_count / total_materials * 100, 2) if total_materials > 0 else 0
+    stop_loss_cost = round(_safe_float(poor_stats.get('cost')), 2)
+    benchmark_cpas = [_safe_float(g.get('cost')) / _safe_float(g.get('conversion')) for g in grade_dist if _safe_float(g.get('conversion')) > 0]
+    benchmark_cpa = round(sum(benchmark_cpas) / len(benchmark_cpas), 2) if benchmark_cpas else avg_cpa
+
+    if avg_cpa <= 0:
+        cpa_health = '暂无有效转化成本'
+        cpa_level = 'neutral'
+    elif benchmark_cpa > 0 and avg_cpa <= benchmark_cpa * 0.9:
+        cpa_health = 'CPA健康，效率优于项目基准'
+        cpa_level = 'good'
+    elif benchmark_cpa > 0 and avg_cpa <= benchmark_cpa * 1.15:
+        cpa_health = 'CPA基本稳定，适合结构性优化'
+        cpa_level = 'normal'
+    else:
+        cpa_health = 'CPA偏高，优先排查高耗低转化素材'
+        cpa_level = 'warning'
+
+    if effective_rate >= 20:
+        material_health = '有效素材率较好，可继续复制放量'
+    elif effective_rate >= 8:
+        material_health = '有效素材率一般，需要扩大测试与优化池'
+    else:
+        material_health = '有效素材率偏低，建议优先重构素材供给'
+
+    diagnosis = {
+        'ctr': ctr,
+        'cvr': cvr,
+        'avg_cpa': avg_cpa,
+        'benchmark_cpa': benchmark_cpa,
+        'cpa_health': cpa_health,
+        'cpa_level': cpa_level,
+        'effective_count': effective_count,
+        'effective_rate': effective_rate,
+        'stop_loss_count': poor_count,
+        'stop_loss_cost': stop_loss_cost,
+        'material_health': material_health,
+        'headline': f"当前累计消耗¥{round(_safe_float(stats.get('total_cost')), 2)}，转化{round(total_conversion, 2)}个，CPA为¥{avg_cpa}。{cpa_health}；{material_health}。",
+        'actions': [
+            '优先复制 S/A/优质素材，作为今日增量候选',
+            'P级素材单独建小预算测试计划，避免直接放量',
+            'C级/劣质素材进入止损排查，减少无效消耗'
+        ]
+    }
+
     conn.close()
 
     return jsonify({
         'stats': stats,
+        'diagnosis': diagnosis,
         'grade_distribution': grade_dist,
         'cost_tier_distribution': cost_tier_dist,
         'potential_stats': potential_stats,
