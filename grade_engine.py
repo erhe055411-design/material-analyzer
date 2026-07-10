@@ -141,7 +141,10 @@ def classify_material(material, stats, rules=None):
     mid_volume_threshold = stats.get('cost_p50', 0) if rules['a_cost_pct'] <= 50 else stats.get('cost_p70', 0)
 
     has_target = target_cpa > 0
-    s_cpa_ok = conversion_cost > 0 and (not has_target or conversion_cost <= target_cpa * rules['s_cpa_ratio'])
+    median_cpa = _positive(stats.get('conv_cost_p50')) or target_cpa
+    s_cpa_line_candidates = [x for x in [target_cpa, median_cpa] if x and x > 0]
+    s_cpa_line = min(s_cpa_line_candidates) if s_cpa_line_candidates else 0
+    s_cpa_ok = conversion_cost > 0 and (not s_cpa_line or conversion_cost <= s_cpa_line * max(rules['s_cpa_ratio'], 1.0))
     a_cpa_ok = conversion_cost > 0 and (not has_target or conversion_cost <= target_cpa * rules['a_cpa_ratio'])
     b_cpa_ok = conversion_cost > 0 and (not has_target or conversion_cost <= target_cpa * rules['b_cpa_ratio'])
 
@@ -226,13 +229,19 @@ def apply_grades_to_db(project_id=None, rules=None):
         grade = classify_material(material, stats, normalized_rules)
         quality = classify_quality(material, stats, normalized_rules)
 
-        final_grade = quality if quality == '劣' else grade
-        if quality == '优' and grade in ('S', 'A'):
-            final_grade = '优'
-
         conn.execute(
-            "UPDATE materials SET grade=? WHERE id=?",
-            (final_grade, material['id'])
+            """
+            UPDATE materials
+            SET grade=?, is_potential=?, is_quality_grade=?, is_poor_grade=?
+            WHERE id=?
+            """,
+            (
+                grade,
+                1 if grade == 'P' else 0,
+                1 if quality == '优' else 0,
+                1 if quality == '劣' else 0,
+                material['id']
+            )
         )
         updated += 1
 
