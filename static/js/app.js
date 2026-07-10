@@ -664,69 +664,73 @@ function renderPagination(total, page) {
 async function renderRecommend() {
     const el = document.getElementById('pageContent');
     if (!S.pid) {
-        el.innerHTML = '<div class="empty"><h3>请先选择项目</h3><p>选择项目后查看推荐上新素材</p></div>';
+        el.innerHTML = '<div class="empty">请选择项目</div>';
         return;
     }
     el.innerHTML = '<div class="loading">加载推荐素材中...</div>';
 
     try {
         const data = await api(`/api/projects/${S.pid}/recommend`);
-
+        const sections = data.sections || {};
         el.innerHTML = `
-        <div class="recommend-page">
-            <div class="recommend-header">
-                <h2>🆕 推荐上新素材</h2>
-                <p class="recommend-desc">基于投放数据智能筛选，各系列前15条素材</p>
-            </div>
-
-            <!-- 增量系列 -->
-            <div class="recommend-section" data-expanded="true">
-                <div class="recommend-header-bar" onclick="toggleRecommendSection(this)">
-                    <div class="recommend-title">
-                        <span class="recommend-tag tag-increment">📈 增量系列</span>
-                        <span class="recommend-subtitle">优质素材中消耗最高 → 放量主力，增量首选</span>
-                        <span class="recommend-count">${(data.increment || []).length} 条</span>
-                    </div>
-                    <span class="recommend-toggle">▼</span>
+        <div class="recommend-page pro">
+            <div class="rec-command-center">
+                <div>
+                    <div class="section-eyebrow">AI 投放动作建议</div>
+                    <h2>🆕 推荐上新素材</h2>
+                    <p>${escapeHtml(data.summary?.headline || '根据当前项目素材表现生成上新建议')}</p>
                 </div>
-                <div class="recommend-body">
-                    ${renderRecommendTable(data.increment || [], 'increment')}
+                <div class="rec-command-metrics">
+                    <div><strong>${fmt(data.summary?.total_materials || 0)}</strong><span>素材样本</span></div>
+                    <div><strong>¥${fmt(data.summary?.project_avg_cpa || 0)}</strong><span>项目均CPA</span></div>
+                    <div><strong>${fmt(data.summary?.project_avg_ctr || 0)}%</strong><span>项目均CTR</span></div>
                 </div>
             </div>
-
-            <!-- 稳量系列 -->
-            <div class="recommend-section" data-expanded="true">
-                <div class="recommend-header-bar" onclick="toggleRecommendSection(this)">
-                    <div class="recommend-title">
-                        <span class="recommend-tag tag-stable">⚖️ 稳量系列</span>
-                        <span class="recommend-subtitle">优质素材中转化成本低且稳定 → 持续产出，ROI最优</span>
-                        <span class="recommend-count">${(data.stable || []).length} 条</span>
-                    </div>
-                    <span class="recommend-toggle">▼</span>
-                </div>
-                <div class="recommend-body">
-                    ${renderRecommendTable(data.stable || [], 'stable')}
-                </div>
-            </div>
-
-            <!-- 潜力测试系列 -->
-            <div class="recommend-section" data-expanded="true">
-                <div class="recommend-header-bar" onclick="toggleRecommendSection(this)">
-                    <div class="recommend-title">
-                        <span class="recommend-tag tag-potential">🧪 潜力测试系列</span>
-                        <span class="recommend-subtitle">潜力素材中CTR高且有转化 → 低耗高效，值得放量测试</span>
-                        <span class="recommend-count">${(data.potential || []).length} 条</span>
-                    </div>
-                    <span class="recommend-toggle">▼</span>
-                </div>
-                <div class="recommend-body">
-                    ${renderRecommendTable(data.potential || [], 'potential')}
-                </div>
-            </div>
+            ${recommendStrategySection('increment', sections.increment, data.increment || [])}
+            ${recommendStrategySection('stable', sections.stable, data.stable || [])}
+            ${recommendStrategySection('potential', sections.potential, data.potential || [])}
         </div>`;
     } catch (e) {
         el.innerHTML = `<div class="error-box">加载失败: ${e.message}</div>`;
     }
+}
+
+function recFallbackMetrics(items) {
+    return { count: items.length, total_cost: 0, total_conversion: 0, avg_cpa: 0, avg_ctr: 0, s_count: 0, quality_count: 0, potential_count: 0 };
+}
+
+function recommendStrategySection(type, section = {}, items = []) {
+    const defaults = {
+        increment: { title: '增量系列', priority: '高优先级', positioning: '已验证高效素材，用于复制计划、扩人群、小幅加预算', action: '优先复制计划，小幅加预算。', rule: 'S/A级或优质标签素材。' },
+        stable: { title: '稳量系列', priority: '中高优先级', positioning: '低CPA且有转化沉淀，用于维持产出和稳态扩量', action: '保持预算稳定，复制相同卖点结构。', rule: '有转化且CPA靠前。' },
+        potential: { title: '潜力测试系列', priority: '测试优先级', positioning: '样本不足但前端信号好，用于小预算二次验证', action: '单独测试，禁止直接放量。', rule: 'P级/潜力标签素材。' }
+    };
+    section = { ...defaults[type], ...section };
+    const m = section.metrics || recFallbackMetrics(items);
+    const icon = type === 'increment' ? '📈' : type === 'stable' ? '⚖️' : '🧪';
+    return `
+        <div class="recommend-section pro rec-${type}" data-expanded="true">
+            <div class="recommend-header-bar pro" onclick="toggleRecommendSection(this)">
+                <div class="recommend-title pro">
+                    <span class="recommend-tag tag-${type}">${icon} ${escapeHtml(section.title)}</span>
+                    <span class="recommend-priority">${escapeHtml(section.priority)}</span>
+                    <span class="recommend-subtitle">${escapeHtml(section.positioning)}</span>
+                    <span class="recommend-count">${fmt(m.count || items.length)} 条</span>
+                </div>
+                <span class="recommend-toggle">▼</span>
+            </div>
+            <div class="recommend-body">
+                <div class="rec-kpi-grid">
+                    <div><span>平均CPA</span><strong>¥${fmt(m.avg_cpa || 0)}</strong></div>
+                    <div><span>总转化</span><strong>${fmt(m.total_conversion || 0)}</strong></div>
+                    <div><span>平均CTR</span><strong>${fmt(m.avg_ctr || 0)}%</strong></div>
+                    <div><span>命中标签</span><strong>${fmt((m.s_count || 0) + (m.quality_count || 0) + (m.potential_count || 0))}</strong></div>
+                </div>
+                <div class="rec-action-box"><span>建议动作</span><strong>${escapeHtml(section.action)}</strong></div>
+                <div class="rec-rule">筛选口径：${escapeHtml(section.rule)}</div>
+                ${renderRecommendTable(items, type)}
+            </div>
+        </div>`;
 }
 
 function toggleRecommendSection(header) {
@@ -734,45 +738,44 @@ function toggleRecommendSection(header) {
     const body = section.querySelector('.recommend-body');
     const toggle = header.querySelector('.recommend-toggle');
     const isExpanded = section.dataset.expanded === 'true';
-    
-    if (isExpanded) {
-        body.style.display = 'none';
-        toggle.textContent = '▶';
-        section.dataset.expanded = 'false';
-    } else {
-        body.style.display = '';
-        toggle.textContent = '▼';
-        section.dataset.expanded = 'true';
-    }
+    body.style.display = isExpanded ? 'none' : '';
+    toggle.textContent = isExpanded ? '▶' : '▼';
+    section.dataset.expanded = isExpanded ? 'false' : 'true';
 }
 
 function renderRecommendTable(items, type) {
     if (!items || items.length === 0) {
-        return `<div class="empty" style="padding:30px"><p>暂无推荐素材</p></div>`;
+        return `<div class="empty" style="padding:30px"><p>暂无推荐素材，请先应用新版分级或导入更多数据</p></div>`;
     }
 
-    return `<div class="table-wrap"><table>
+    return `<div class="table-wrap rec-table-wrap"><table class="rec-table">
         <thead><tr>
-            <th>排名</th><th>分级</th><th>素材名称</th><th>审核状态</th><th>消耗</th><th>展示</th><th>点击</th>
-            <th>点击率</th><th>转化数</th><th>转化成本</th><th>状态</th>
+            <th>排名</th><th>素材与分级</th><th>效率表现</th><th>推荐依据 / 风险提示</th><th>账户</th><th>操作状态</th>
         </tr></thead>
-        <tbody>${items.map((m, idx) => `<tr>
-            <td><span class="rank-badge rank-${idx < 3 ? idx + 1 : ''}">${idx + 1}</span></td>
-            <td>${gradeBadge(m.grade || '-', m.is_potential, m.is_quality_grade, m.is_poor_grade)}</td>
-            <td class="td-name" title="${escapeHtml(m.material_name || '')}">
-                ${copyButtonHtml(m.material_name || '')}
-                ${escapeHtml(m.material_name || '-')}
-            </td>
-            <td>${reviewStatusBadge(m.review_status)}</td>
-            <td>${fmtCost(m.cost)}</td>
-            <td>${fmt(m.show)}</td>
-            <td>${fmt(m.click)}</td>
-            <td>${m.ctr}%</td>
-            <td>${fmt(m.conversion)}</td>
-            <td>${fmt(m.conversion_cost)}</td>
-            <td>${m.status || '-'}</td>
-        </tr>`).join('')}</tbody>
+        <tbody>${items.map((m, idx) => recommendRow(m, idx)).join('')}</tbody>
     </table></div>`;
+}
+
+function recommendRow(m, idx) {
+    const reasons = (m.reasons || []).slice(0, 2).map(r => `<span>✓ ${escapeHtml(r)}</span>`).join('');
+    const risks = (m.risks || []).slice(0, 1).map(r => `<span>⚠ ${escapeHtml(r)}</span>`).join('');
+    return `<tr>
+        <td><span class="rank-badge rank-${idx < 3 ? idx + 1 : ''}">${idx + 1}</span></td>
+        <td class="td-name" title="${escapeHtml(m.material_name || '')}">
+            <div class="rec-name-line">${copyButtonHtml(m.material_name || '')}${escapeHtml(m.material_name || '-')}</div>
+            <div class="rec-subline">${gradeBadge(m.grade || '-', m.is_potential, m.is_quality_grade, m.is_poor_grade)}</div>
+        </td>
+        <td>
+            <div class="rec-eff">${fmtCost(m.cost)} · ${fmt(m.conversion)}转化</div>
+            <div class="rec-subline">CPA ${fmtCost(m.conversion_cost)} · CTR ${fmt(m.ctr)}% · 点击 ${fmt(m.click)}</div>
+        </td>
+        <td>
+            <div class="rec-reasons">${reasons || '<span>✓ 进入该系列筛选池</span>'}</div>
+            <div class="rec-risks">${risks || '<span>⚠ 需结合预算和人群继续观察</span>'}</div>
+        </td>
+        <td>${escapeHtml(m.account_name || m.acc_id || '-')}</td>
+        <td>${reviewStatusBadge(m.review_status)}<div class="rec-subline">${escapeHtml(m.status || '-')}</div></td>
+    </tr>`;
 }
 
 // ========== 数据导入 ==========

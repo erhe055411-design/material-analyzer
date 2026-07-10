@@ -30,6 +30,20 @@ os.makedirs(os.path.join(os.path.dirname(__file__), 'data'), exist_ok=True)
 init_db()
 
 
+def _safe_float(value, default=0.0):
+    """安全转换数值，兼容空值、百分号和字符串。"""
+    try:
+        if value is None or value == '':
+            return default
+        if isinstance(value, str):
+            value = value.strip().replace('%', '').replace(',', '')
+            if not value:
+                return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def get_visitor_id():
     """获取浏览器访客身份，用于免登录数据隔离。"""
     vid = request.headers.get('X-Visitor-Id') or request.cookies.get('visitor_id') or 'legacy'
@@ -1429,53 +1443,169 @@ def export_project(pid):
     )
 
 
+def _material_metric_summary(items):
+    """推荐系列核心指标摘要。"""
+    count = len(items or [])
+    total_cost = sum(_safe_float(i.get('cost')) for i in items or [])
+    total_conversion = sum(_safe_float(i.get('conversion')) for i in items or [])
+    total_click = sum(_safe_float(i.get('click')) for i in items or [])
+    total_show = sum(_safe_float(i.get('show')) for i in items or [])
+    valid_cpas = [_safe_float(i.get('conversion_cost')) for i in items or [] if _safe_float(i.get('conversion')) > 0 and _safe_float(i.get('conversion_cost')) > 0]
+    avg_cpa = sum(valid_cpas) / len(valid_cpas) if valid_cpas else 0
+    avg_ctr = (sum(_safe_float(i.get('ctr')) for i in items or []) / count) if count else 0
+    overall_ctr = (total_click / total_show * 100) if total_show else avg_ctr
+    return {
+        'count': count,
+        'total_cost': round(total_cost, 2),
+        'total_conversion': round(total_conversion, 2),
+        'avg_cpa': round(avg_cpa, 2),
+        'avg_ctr': round(overall_ctr, 2),
+        'total_click': round(total_click, 2),
+        'quality_count': sum(1 for i in items or [] if _safe_float(i.get('is_quality_grade')) > 0),
+        'potential_count': sum(1 for i in items or [] if _safe_float(i.get('is_potential')) > 0),
+        's_count': sum(1 for i in items or [] if str(i.get('grade') or '').upper() == 'S'),
+    }
+
+
+def _recommend_reasons(item, section_type, project_avg_cpa, project_avg_ctr):
+    """给单条素材生成投手可读的推荐依据与风险。"""
+    reasons = []
+    risks = []
+    grade = str(item.get('grade') or '-')
+    cost = _safe_float(item.get('cost'))
+    conv = _safe_float(item.get('conversion'))
+    cpa = _safe_float(item.get('conversion_cost'))
+    ctr = _safe_float(item.get('ctr'))
+
+    if grade in ('S', 'A'):
+        reasons.append(f'{grade}级素材，已通过效率验证')
+    if item.get('is_quality_grade'):
+        reasons.append('优质标签：成本/转化表现优于项目基准')
+    if conv > 0 and cpa > 0 and project_avg_cpa > 0:
+        diff = (project_avg_cpa - cpa) / project_avg_cpa * 100
+        if diff >= 5:
+            reasons.append(f'CPA低于项目均值约{round(diff)}%')
+        elif cpa <= project_avg_cpa * 1.15:
+            reasons.append('CPA接近项目均值，可继续观察放量')
+    if ctr > 0 and project_avg_ctr > 0 and ctr >= project_avg_ctr * 1.1:
+        reasons.append('CTR高于项目均值，前端吸引力较强')
+    if conv >= 3:
+        reasons.append(f'累计转化{int(conv)}个，样本具备参考价值')
+    if section_type == 'potential':
+        reasons.append('低消耗阶段信号较好，适合小预算二次验证')
+
+    if conv == 0 and cost > 0:
+        risks.append('暂无转化，禁止直接放量')
+    if cpa > 0 and project_avg_cpa > 0 and cpa > project_avg_cpa * 1.2:
+        risks.append('CPA高于项目均值，需控制预算')
+    if cost < 100 and section_type != 'potential':
+        risks.append('样本偏小，建议先观察稳定性')
+    if ctr > 0 and project_avg_ctr > 0 and ctr >= project_avg_ctr * 1.5 and conv == 0:
+        risks.append('CTR高但无转化，注意骗点击风险')
+
+    return {
+        'reasons': reasons[:3] or ['数据表现进入该系列筛选池'],
+        'risks': risks[:2] or ['暂无明显风险，仍需结合账户预算与人群承接观察']
+    }
+
+
 @app.route('/api/projects/<int:pid>/recommend', methods=['GET'])
 def recommend_materials(pid):
-    """推荐上新素材：增量/稳量/潜力各15条"""
+    """推荐上新素材：输出投手动作导向的增量/稳量/潜力系列。"""
     conn = get_db()
-    
-    # 增量系列：优质素材中消耗最高（放量主力）
-    cur = conn.execute("""
+
+    base_select = """
         SELECT m.*, a.account_id as acc_id, a.account_name, a.campaign_purpose,
                t.video_code, t.price_point, t.product, t.actor, t.bd, t.copywriting
         FROM materials m
         JOIN accounts a ON m.account_id = a.id
         LEFT JOIN material_tags t ON t.material_id = m.id
-        WHERE a.project_id=? AND m.is_quality_grade=1
-        ORDER BY m.cost DESC
+    """
+
+    cur = conn.execute("""
+        SELECT AVG(CASE WHEN m.conversion > 0 AND m.conversion_cost > 0 THEN m.conversion_cost END) AS avg_cpa,
+               AVG(CASE WHEN m.ctr > 0 THEN m.ctr END) AS avg_ctr,
+               SUM(m.cost) AS total_cost,
+               SUM(m.conversion) AS total_conversion,
+               COUNT(*) AS total_materials
+        FROM materials m
+        JOIN accounts a ON m.account_id = a.id
+        WHERE a.project_id=?
+    """, (pid,))
+    project_stats = dict(cur.fetchone() or {})
+    project_avg_cpa = _safe_float(project_stats.get('avg_cpa'))
+    project_avg_ctr = _safe_float(project_stats.get('avg_ctr'))
+
+    # 增量系列：S/A且优质优先，代表可以复制计划/扩人群/小幅加预算。
+    cur = conn.execute(base_select + """
+        WHERE a.project_id=? AND (m.grade IN ('S','A') OR m.is_quality_grade=1)
+        ORDER BY CASE WHEN m.grade='S' THEN 0 WHEN m.grade='A' THEN 1 ELSE 2 END,
+                 m.is_quality_grade DESC, m.conversion DESC, m.cost DESC
         LIMIT 15
     """, (pid,))
     increment_list = [dict(r) for r in cur.fetchall()]
-    
-    # 稳量系列：优质素材中转化成本最低且转化数稳定（稳定产出）
-    cur = conn.execute("""
-        SELECT m.*, a.account_id as acc_id, a.account_name, a.campaign_purpose,
-               t.video_code, t.price_point, t.product, t.actor, t.bd, t.copywriting
-        FROM materials m
-        JOIN accounts a ON m.account_id = a.id
-        LEFT JOIN material_tags t ON t.material_id = m.id
-        WHERE a.project_id=? AND m.is_quality_grade=1 AND m.conversion >= 1
-        ORDER BY m.conversion_cost ASC, m.conversion DESC
+
+    # 稳量系列：有转化、CPA较低，代表继续跑/小幅扩量。
+    cur = conn.execute(base_select + """
+        WHERE a.project_id=? AND m.conversion >= 1 AND m.conversion_cost > 0
+        ORDER BY m.conversion_cost ASC, m.conversion DESC, m.cost DESC
         LIMIT 15
     """, (pid,))
     stable_list = [dict(r) for r in cur.fetchall()]
-    
-    # 潜力测试系列：潜力素材中按点击率+转化数排序
-    cur = conn.execute("""
-        SELECT m.*, a.account_id as acc_id, a.account_name, a.campaign_purpose,
-               t.video_code, t.price_point, t.product, t.actor, t.bd, t.copywriting
-        FROM materials m
-        JOIN accounts a ON m.account_id = a.id
-        LEFT JOIN material_tags t ON t.material_id = m.id
-        WHERE a.project_id=? AND m.is_potential=1
-        ORDER BY m.ctr DESC, m.conversion DESC
+
+    # 潜力测试系列：P标签或低耗高CTR，代表单独小预算验证。
+    cur = conn.execute(base_select + """
+        WHERE a.project_id=? AND (m.is_potential=1 OR m.grade='P')
+        ORDER BY m.is_potential DESC, m.ctr DESC, m.click DESC, m.conversion DESC
         LIMIT 15
     """, (pid,))
     potential_list = [dict(r) for r in cur.fetchall()]
-    
+
     conn.close()
-    
+
+    sections = {
+        'increment': {
+            'title': '增量系列',
+            'priority': '高优先级',
+            'positioning': '已验证高效素材，用于复制计划、扩人群、小幅加预算',
+            'action': '优先复制计划，预算建议从当前稳定计划的20%-30%开始加，观察2-3个转化窗口。',
+            'rule': 'S/A级或优质标签素材，优先看转化数、CPA和消耗承接能力。',
+            'metrics': _material_metric_summary(increment_list),
+        },
+        'stable': {
+            'title': '稳量系列',
+            'priority': '中高优先级',
+            'positioning': '低CPA且有转化沉淀，用于维持产出和稳态扩量',
+            'action': '保持预算稳定，优先复制相同卖点/剪辑结构，谨慎大幅提预算。',
+            'rule': '有转化且CPA靠前，优先看成本效率和转化稳定性。',
+            'metrics': _material_metric_summary(stable_list),
+        },
+        'potential': {
+            'title': '潜力测试系列',
+            'priority': '测试优先级',
+            'positioning': '样本不足但前端信号好，用于小预算二次验证',
+            'action': '单独建测试计划，控制预算，不建议直接并入放量计划。',
+            'rule': 'P级/潜力标签素材，优先看CTR、点击量、低消耗和早期转化苗头。',
+            'metrics': _material_metric_summary(potential_list),
+        }
+    }
+
+    for key, items in [('increment', increment_list), ('stable', stable_list), ('potential', potential_list)]:
+        for item in items:
+            item.update(_recommend_reasons(item, key, project_avg_cpa, project_avg_ctr))
+
+    summary = {
+        'headline': f"今日建议：优先处理{len(increment_list)}条增量素材，稳住{len(stable_list)}条低CPA素材，给{len(potential_list)}条潜力素材单独测试预算。",
+        'project_avg_cpa': round(project_avg_cpa, 2),
+        'project_avg_ctr': round(project_avg_ctr, 2),
+        'total_materials': int(_safe_float(project_stats.get('total_materials'))),
+        'total_cost': round(_safe_float(project_stats.get('total_cost')), 2),
+        'total_conversion': round(_safe_float(project_stats.get('total_conversion')), 2),
+    }
+
     return jsonify({
+        'summary': summary,
+        'sections': sections,
         'increment': increment_list,
         'stable': stable_list,
         'potential': potential_list
